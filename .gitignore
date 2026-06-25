@@ -1,0 +1,8 @@
+.DS_Store
+
+# 成品只走 Release 资产,不提交进仓库本体
+*.dmg
+*.exe
+*.zip
+*.pkg
+*.app/
