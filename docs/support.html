@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidekey — Support / 支持</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { max-width: 720px; margin: 0 auto; padding: 32px 20px 64px;
+         font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+         color: #1c1c1e; background: #fff; }
+  @media (prefers-color-scheme: dark) { body { color: #e6e6e6; background: #1c1c1e; } a { color: #6ab3ff; } .btn { background:#2c2c2e; } }
+  h1 { font-size: 1.7rem; margin: 0 0 4px; }
+  h2 { font-size: 1.25rem; margin: 2.2rem 0 .6rem; }
+  h3 { font-size: 1.05rem; margin: 1.4rem 0 .3rem; }
+  .muted { color: #888; font-size: .9rem; }
+  .btn { display:inline-block; padding:10px 18px; margin:6px 8px 6px 0; border-radius:10px;
+         background:#f0f0f2; text-decoration:none; font-weight:600; }
+  hr { border: none; border-top: 1px solid #8884; margin: 3rem 0; }
+  ul, ol { padding-left: 1.3rem; }
+  li { margin: .2rem 0; }
+  code { background: #8882; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Sidekey — Support</h1>
+<p class="muted">Turn your iPhone into a wireless keyboard &amp; shortcut pad for your Mac or Windows PC.</p>
+
+<h2>Get the desktop helper</h2>
+<p>Sidekey needs a small free helper running on the computer you want to control. Download it for your system:</p>
+<p>
+  <a class="btn" href="https://github.com/wongsiufool/sidekey/releases/download/v0.1.0/Sidekey-macOS.zip">⬇︎ macOS (.zip)</a>
+  <a class="btn" href="https://github.com/wongsiufool/sidekey/releases/download/v0.1.0/SidekeyServer-Windows.exe">⬇︎ Windows (.exe)</a>
+</p>
+
+<h2>Quick start</h2>
+<ol>
+  <li>Make sure your iPhone and your computer are on the <strong>same Wi‑Fi network</strong>.</li>
+  <li>Install and open the <strong>desktop helper</strong> on your computer. It shows a QR code.</li>
+  <li>On iPhone, open <strong>Sidekey</strong> → tap the computer name at the top → <strong>“Scan to add computer”</strong> → scan that QR code.</li>
+  <li>Tap a key on your phone — it appears on your computer. Done.</li>
+</ol>
+
+<h2>First‑run permissions</h2>
+<ul>
+  <li><strong>Local Network</strong> (iPhone &amp; computer): allow it, or the phone can't reach the computer.</li>
+  <li><strong>macOS — Accessibility</strong>: the helper asks for it on first launch. Open <em>System Settings → Privacy &amp; Security → Accessibility</em>, turn Sidekey on, then quit and reopen the helper. Without this, keys won't take effect.</li>
+  <li><strong>Windows — Firewall</strong>: when prompted, allow Sidekey on <em>Private networks</em>.</li>
+</ul>
+
+<h2>FAQ</h2>
+<h3>My phone can't find / connect to the computer</h3>
+<ul>
+  <li>Both devices must be on the same Wi‑Fi (and not on a “guest” network that blocks device‑to‑device traffic).</li>
+  <li>Make sure the desktop helper is running and you allowed its firewall / local‑network prompt.</li>
+  <li>You can also add a computer manually by pasting the pairing code shown in the helper.</li>
+</ul>
+<h3>I tap keys but nothing happens on the computer (Mac)</h3>
+<p>Grant Accessibility permission to the helper (see above) and then quit and reopen it — the permission only takes effect after a restart.</p>
+<h3>How do I re‑pair, or use a new phone?</h3>
+<p>Just scan the QR code again. To rotate the security token, restart the helper with the reset option (see the helper's README).</p>
+<h3>Is it secure?</h3>
+<p>Pairing is protected by a token, and keystrokes travel only over your local network directly to your own computer — nothing goes through us. See our <a href="https://wongsiufool.github.io/sidekey/privacy.html">Privacy Policy</a>.</p>
+
+<h2>Contact</h2>
+<p>Still stuck or have a feature request? Email <a href="mailto:ckh123abc@gmail.com">ckh123abc@gmail.com</a> — we're happy to help.</p>
+
+<hr>
+
+<h1>Sidekey — 支持</h1>
+<p class="muted">把 iPhone 变成你 Mac / Windows 电脑的无线键盘和快捷键面板。</p>
+
+<h2>下载电脑端小助手</h2>
+<p>Sidekey 需要在你想控制的那台电脑上运行一个免费的小助手。按系统下载：</p>
+<p>
+  <a class="btn" href="https://github.com/wongsiufool/sidekey/releases/download/v0.1.0/Sidekey-macOS.zip">⬇︎ macOS（.zip）</a>
+  <a class="btn" href="https://github.com/wongsiufool/sidekey/releases/download/v0.1.0/SidekeyServer-Windows.exe">⬇︎ Windows（.exe）</a>
+</p>
+
+<h2>快速上手</h2>
+<ol>
+  <li>确保 iPhone 和电脑连在<strong>同一个 Wi‑Fi</strong>。</li>
+  <li>在电脑上安装并打开<strong>小助手</strong>，它会显示一个二维码。</li>
+  <li>iPhone 打开 <strong>Sidekey</strong> → 点顶部的电脑名 → <strong>「扫码添加电脑」</strong> → 扫那个二维码。</li>
+  <li>在手机上点一个键，电脑就有反应。完成。</li>
+</ol>
+
+<h2>首次运行的权限</h2>
+<ul>
+  <li><strong>本地网络</strong>（手机和电脑）：要允许，否则手机连不上电脑。</li>
+  <li><strong>macOS — 辅助功能</strong>：小助手首次启动会请求。打开<em>系统设置 → 隐私与安全性 → 辅助功能</em>，把 Sidekey 打开，然后退出小助手再重新打开。没有这一步，按键不会生效。</li>
+  <li><strong>Windows — 防火墙</strong>：弹窗时勾选<em>专用网络</em>并允许。</li>
+</ul>
+
+<h2>常见问题</h2>
+<h3>手机找不到 / 连不上电脑</h3>
+<ul>
+  <li>两台设备要在同一个 Wi‑Fi（别用会隔离设备的「访客」网络）。</li>
+  <li>确认小助手在运行，且你允许了它的防火墙 / 本地网络弹窗。</li>
+  <li>也可以用小助手里显示的「配对码」手动添加电脑。</li>
+</ul>
+<h3>点了键，电脑（Mac）没反应</h3>
+<p>给小助手授予「辅助功能」权限（见上），然后退出再重新打开它——授权要重启一次才生效。</p>
+<h3>怎么重新配对，或换新手机？</h3>
+<p>重新扫一次二维码即可。要更换安全令牌，用重置选项重启小助手（见小助手的说明文件）。</p>
+<h3>安全吗？</h3>
+<p>配对有令牌保护，按键只走你的局域网、直达你自己的电脑，不经过我们。详见<a href="https://wongsiufool.github.io/sidekey/privacy.html">隐私政策</a>。</p>
+
+<h2>联系我们</h2>
+<p>还有问题或功能建议？邮件 <a href="mailto:ckh123abc@gmail.com">ckh123abc@gmail.com</a>，很乐意帮忙。</p>
+
+</body>
+</html>
