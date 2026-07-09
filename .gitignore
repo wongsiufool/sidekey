@@ -6,3 +6,16 @@
 *.zip
 *.pkg
 *.app/
+
+# iOS / Xcode
+ios/Sidekey.xcodeproj/
+DerivedData/
+build/
+*.xcarchive
+
+# Python / server
+__pycache__/
+*.pyc
+dist/
+server/.buildenv/
+server/.buildenv-mac/

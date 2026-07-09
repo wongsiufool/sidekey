@@ -1,0 +1,67 @@
+name: Sidekey
+options:
+  bundleIdPrefix: com.sidekey
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+targets:
+  Sidekey:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sidekey
+    info:
+      path: Sidekey/Info.plist
+      properties:
+        CFBundleDisplayName: Sidekey
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocalNetworkUsageDescription: "Sidekey connects to your computer over the local network to send keystrokes and shortcuts."
+        NSCameraUsageDescription: "Sidekey uses the camera to scan the pairing QR code shown by your computer."
+        NSBonjourServices:
+          - _sidekey._tcp
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kaihongchen.sidekey
+        DEVELOPMENT_TEAM: DBYWRB2S9S
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "5"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    scheme:
+      testTargets:
+        - SidekeyTests
+        - SidekeyUITests
+  SidekeyTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SidekeyTests
+    dependencies:
+      - target: Sidekey
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kaihongchen.sidekey.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+  SidekeyUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: SidekeyUITests
+    dependencies:
+      - target: Sidekey
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kaihongchen.sidekey.uitests
+        GENERATE_INFOPLIST_FILE: "YES"

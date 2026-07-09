@@ -1,0 +1,3 @@
+/* Permission usage descriptions — English (base/development language) */
+"NSLocalNetworkUsageDescription" = "Sidekey connects to your computer over the local network to send keystrokes and shortcuts.";
+"NSCameraUsageDescription" = "Sidekey uses the camera to scan the pairing QR code shown by your computer.";

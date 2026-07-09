@@ -1,0 +1,5 @@
+/* 欢迎页 slogan */
+"welcome.slogan" = "你的电脑，触手可及";
+
+/* 欢迎页 行动按钮 */
+"welcome.cta" = "开始使用";

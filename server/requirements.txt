@@ -1,0 +1,8 @@
+websockets>=12,<14
+pynput>=1.7,<2
+pyperclip>=1.8,<2
+qrcode>=7,<9
+pillow>=10
+zeroconf>=0.130,<1
+cryptography>=42        # 自签名 TLS 证书 (wss 加密 + 指纹 pin)
+pystray>=0.19           # Windows 右下角托盘图标 (无控制台运行)
