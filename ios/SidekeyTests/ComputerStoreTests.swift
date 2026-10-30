@@ -27,13 +27,14 @@ final class ComputerStoreTests: XCTestCase {
         d.set(Data(json.utf8), forKey: "sidekey.app.v3")
     }
 
-    // 全新安装: 一台电脑 · 两个内置模式 (Vibe Coding 默认 + vibecoding键盘模式); Vibe 单页(触控板)。
+    // 全新安装: 一台电脑 · 四个内置模式 (Vibe Coding 默认 + vibecoding键盘模式 + Codex Micro + 笔记本键盘); Vibe 单页(触控板)。
     func testFreshInstallSeedsBuiltinModes() {
         let store = LayoutStore(defaults: freshDefaults())
         XCTAssertEqual(store.computers.count, 1)
         XCTAssertEqual(store.currentComputer?.id, store.currentComputerID)
-        XCTAssertEqual(store.currentComputer?.modes.count, 2)
-        XCTAssertEqual(store.currentComputer?.modes.map(\.name), ["Vibe Coding", "vibecoding键盘模式"])
+        XCTAssertEqual(store.currentComputer?.modes.count, 4)
+        XCTAssertEqual(store.currentComputer?.modes.map(\.name), ["Vibe Coding", "vibecoding键盘模式", "Codex Micro", "笔记本键盘"])
+        XCTAssertEqual(store.currentComputer?.modes.last?.kind, .laptopKeyboard, "笔记本键盘靠类型标识认, 不靠名字 (§4.9)")
         XCTAssertEqual(store.currentMode?.name, "Vibe Coding")        // 默认选中 Vibe
         XCTAssertEqual(store.currentMode?.id, store.currentModeID)
         XCTAssertEqual(store.layers.map(\.id), ["base"])              // Vibe 现单页
@@ -112,7 +113,7 @@ final class ComputerStoreTests: XCTestCase {
         store.addLayer(named: "nav")
         store.addKey(layerID: "base")
         XCTAssertEqual(store.computers.count, 1)
-        XCTAssertEqual(store.currentComputer?.modes.count, 2)   // 内置两模式不变
+        XCTAssertEqual(store.currentComputer?.modes.count, 4)   // 内置四模式不变
     }
 
     // MARK: - 多电脑
@@ -179,7 +180,7 @@ final class ComputerStoreTests: XCTestCase {
         let store = LayoutStore(defaults: freshDefaults())
         let id = store.addMode(named: "工作")
         XCTAssertNotNil(id)
-        XCTAssertEqual(store.currentComputer?.modes.count, 3)   // 内置 2 + 新增 1
+        XCTAssertEqual(store.currentComputer?.modes.count, 5)   // 内置 4 + 新增 1
         XCTAssertTrue(store.currentComputer?.modes.contains { $0.name == "工作" } ?? false)
     }
 
@@ -195,13 +196,15 @@ final class ComputerStoreTests: XCTestCase {
         let second = store.addMode(named: "工作")!
         store.selectMode(second)
         store.deleteMode(id: second)
-        XCTAssertEqual(store.currentComputer?.modes.count, 2)   // 删回内置两模式
+        XCTAssertEqual(store.currentComputer?.modes.count, 4)   // 删回内置四模式
         XCTAssertEqual(store.currentModeID, first)
     }
 
     func testCannotDeleteLastMode() {
         let store = LayoutStore(defaults: freshDefaults())
-        // 内置 2 个 -> 删一个到只剩 1 个
+        // 内置 4 个 -> 删三个到只剩 1 个
+        store.deleteMode(id: store.currentModeID)
+        store.deleteMode(id: store.currentModeID)
         store.deleteMode(id: store.currentModeID)
         XCTAssertEqual(store.currentComputer?.modes.count, 1)
         store.deleteMode(id: store.currentModeID)   // 最后一个不可删
@@ -215,7 +218,7 @@ final class ComputerStoreTests: XCTestCase {
         let srcCapID = store.layers[0].keys[0].id
         let copyID = store.duplicateMode(id: srcID)!
         XCTAssertNotEqual(copyID, srcID)
-        XCTAssertEqual(store.currentComputer?.modes.count, 3)      // 内置 2 + 副本 1
+        XCTAssertEqual(store.currentComputer?.modes.count, 5)      // 内置 4 + 副本 1
         let copy = store.currentComputer!.modes.first { $0.id == copyID }!
         XCTAssertTrue(copy.name.hasSuffix("副本"))
         XCTAssertEqual(copy.layers.map(\.id), ["base"])            // Vibe 现单页

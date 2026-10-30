@@ -3,7 +3,14 @@ import SwiftUI
 @main
 struct SidekeyApp: App {
     var body: some Scene {
-        WindowGroup { RootView() }
+        WindowGroup {
+            #if DEBUG
+            // iPhone Duo M0 测量: --duoprobe 时直接以测量页为根 (新开的窗口同样是测量页)。
+            if DebugArgs.has("--duoprobe") { DuoProbeView() } else { RootView() }
+            #else
+            RootView()
+            #endif
+        }
     }
 }
 

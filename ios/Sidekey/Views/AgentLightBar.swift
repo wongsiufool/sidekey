@@ -10,6 +10,7 @@ struct AgentLightBar: View {
     let orientation: LightOrientation
     let connected: Bool
     var compact: Bool = false          // true = 左上角紧凑药丸 (状态点 + 名称 + ▾), 替代旧的全宽卡
+    var iconOnly: Bool = false         // true = 只剩一个 44×44 的状态圆钮 (手机横屏侧栏), 点开仍是切换菜单
     let onSelect: (String) -> Void
 
     @Environment(\.sidekeyTheme) private var theme
@@ -53,7 +54,22 @@ struct AgentLightBar: View {
     }
 
     var body: some View {
-        if compact { compactChip } else { fullPanel }
+        if iconOnly { statusDotButton } else if compact { compactChip } else { fullPanel }
+    }
+
+    /// 手机横屏侧栏: 状态点圆钮 (命中区 44 × 44)。
+    private var statusDotButton: some View {
+        Menu {
+            agentMenuItems
+        } label: {
+            ConnDot(color: litColor ?? theme.textTertiary, pulsing: state == .busy)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(theme.surface).raisedShadow(theme))
+                .overlay(Circle().strokeBorder(theme.hairline, lineWidth: 1))
+                .contentShape(Circle())
+        }
+        .accessibilityLabel("\(meta.name) status \(label)")
+        .accessibilityIdentifier("agentLightSelector")
     }
 
     /// 左上角紧凑药丸: 状态点 + agent 名 + ▾ (点开切 Claude/Codex/Auto)。替代旧的全宽状态卡。
@@ -67,7 +83,7 @@ struct AgentLightBar: View {
                     .font(.system(size: 14, weight: .medium)).lineLimit(1)
                     .foregroundStyle(theme.textPrimary)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(theme.textTertiary)
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(theme.hint)
             }
             .padding(.horizontal, 14)
             .frame(height: 40)
@@ -124,11 +140,11 @@ struct AgentLightBar: View {
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(theme.textPrimary)
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(theme.textTertiary)
+                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(theme.hint)
                     }
                     Text(label)
                         .font(.system(size: 13))
-                        .foregroundStyle(litColor ?? theme.textTertiary)
+                        .foregroundStyle(litColor ?? theme.hint)
                 }
             }
         }

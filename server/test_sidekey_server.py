@@ -42,6 +42,14 @@ class _RecMouse:
     def scroll(self, dx, dy): self.events.append(("scroll", dx, dy))
 
 
+class _PosMouse(_RecMouse):
+    """带光标位置的假鼠标 (move 按相对量改位置, 与 pynput 一样不自己钳位)。"""
+    def __init__(self, pos):
+        super().__init__(); self.position = pos
+    def move(self, dx, dy):
+        super().move(dx, dy); self.position = (self.position[0] + dx, self.position[1] + dy)
+
+
 class ConnectionProtectionTests(unittest.TestCase):
     def setUp(self):
         m._conn_history.clear()
@@ -147,6 +155,37 @@ class MouseInjectionTests(unittest.TestCase):
         m.do_mouse({"action": "move", "dx": 9999, "dy": -9999})
         moves = [e for e in self.mouse.events if e[0] == "move"]
         self.assertEqual(moves, [("move", 300, -300)])
+
+    def test_move_off_screen_is_clamped_back(self):
+        # 单屏 1920×1080: 移到屏外 → 钳回最近的屏内点, 越界不累积
+        pm = _PosMouse((1900, 1000))
+        m.mouse = pm
+        with mock.patch.object(m, "_screen_rects", return_value=[(0, 0, 1920, 1080)]):
+            m.do_mouse({"action": "move", "dx": 300, "dy": 300})
+            self.assertEqual(pm.position, (1919, 1079))
+            m.do_mouse({"action": "move", "dx": -10, "dy": -10})      # 往回移立刻生效, 不用先「还清」越界
+            self.assertEqual(pm.position, (1909, 1069))
+
+    def test_multi_screen_union_not_misclamped(self):
+        # 主屏 1920×1080 + 右侧上方一块 1280×800 (y 从 -800 开始): 外接矩形里的空白角落不算屏, 两块屏里的点都不动
+        rects = [(0, 0, 1920, 1080), (1920, -800, 1280, 800)]
+        pm = _PosMouse((2500, -400))
+        m.mouse = pm
+        with mock.patch.object(m, "_screen_rects", return_value=rects):
+            m.do_mouse({"action": "move", "dx": 10, "dy": 10})       # 副屏内: 不钳
+            self.assertEqual(pm.position, (2510, -390))
+            pm.position = (1900, 500)
+            m.do_mouse({"action": "move", "dx": 15, "dy": 0})        # 主屏 → 不越界
+            self.assertEqual(pm.position, (1915, 500))
+            m.do_mouse({"action": "move", "dx": 100, "dy": 0})       # (2015, 500): 两块屏之外的空白处 → 钳到最近的主屏右边缘
+            self.assertEqual(pm.position, (1919, 500))
+
+    def test_no_screen_info_keeps_old_behavior(self):
+        pm = _PosMouse((5000, 5000))
+        m.mouse = pm
+        with mock.patch.object(m, "_screen_rects", return_value=None):
+            m.do_mouse({"action": "move", "dx": 10, "dy": 10})
+        self.assertEqual(pm.position, (5010, 5010))
 
     def test_click_down_up(self):
         m.do_mouse({"action": "click", "button": "right"})

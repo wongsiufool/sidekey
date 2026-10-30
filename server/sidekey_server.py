@@ -336,6 +336,60 @@ def do_scroll(dx, dy):
         mouse.scroll(cx, cy)
 
 
+def _screen_rects():
+    """所有显示器的范围 [(x, y, w, h), ...] (全局坐标, 与 pynput 光标坐标同一套)。取不到返回 None (调用方不钳位)。
+    macOS: Quartz 逐屏; Windows: 虚拟屏幕 (所有显示器的外接矩形)。"""
+    try:
+        if IS_MAC:
+            import Quartz
+            err, ids, n = Quartz.CGGetActiveDisplayList(32, None, None)
+            if err or not n:
+                return None
+            rects = []
+            for d in ids[:n]:
+                b = Quartz.CGDisplayBounds(d)
+                rects.append((b.origin.x, b.origin.y, b.size.width, b.size.height))
+            return rects
+        if platform.system() == "Windows":
+            import ctypes
+            gm = ctypes.windll.user32.GetSystemMetrics
+            x, y, w, h = gm(76), gm(77), gm(78), gm(79)    # SM_X/Y/CX/CYVIRTUALSCREEN
+            return [(x, y, w, h)] if w > 0 and h > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _clamp_to_screens(px, py, rects):
+    """点在任一屏内 → 原样返回 (多屏取并集, 不按外接矩形误钳); 否则钳到最近那块屏的最近点。"""
+    best = None
+    for x, y, w, h in rects:
+        if w <= 0 or h <= 0:
+            continue
+        cx = min(max(px, x), x + w - 1)
+        cy = min(max(py, y), y + h - 1)
+        if cx == px and cy == py:
+            return px, py
+        d = (cx - px) ** 2 + (cy - py) ** 2
+        if best is None or d < best[0]:
+            best = (d, cx, cy)
+    return (best[1], best[2]) if best else (px, py)
+
+
+def _keep_cursor_on_screen():
+    """相对移动后把光标钳回屏幕内, 越界量不再累积 (否则往回移要先「还清」越界, 点击会落在屏幕边缘)。取不到屏幕范围就不动。"""
+    try:
+        rects = _screen_rects()
+        pos = mouse.position
+        if not rects or pos is None:
+            return
+        nx, ny = _clamp_to_screens(pos[0], pos[1], rects)
+        if (nx, ny) != (pos[0], pos[1]):
+            mouse.position = (nx, ny)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def do_mouse(msg):
     """触控板/鼠标事件。action: move(dx,dy 相对) / click(button) / scroll(dx,dy) / down(button) / up(button)。"""
     action = (msg.get("action") or "").lower()
@@ -346,6 +400,7 @@ def do_mouse(msg):
             dx = max(-300, min(300, dx)); dy = max(-300, min(300, dy))
             if dx or dy:
                 mouse.move(dx, dy)
+                _keep_cursor_on_screen()
         elif action == "click":
             mouse.click(_mouse_button(msg.get("button", "left")), 1)
             log.info(f"🖱  click {msg.get('button', 'left')}")
@@ -541,6 +596,121 @@ def compute_all_status(deep=False):
     return data
 
 
+def _read_first_json(path, max_lines=3):
+    """读文件前几行, 返回第一个能解析的 JSON 对象 (Codex rollout 的 session_meta 在开头)。"""
+    try:
+        with open(path, "rb") as f:
+            for _ in range(max_lines):
+                ln = f.readline()
+                if not ln:
+                    break
+                try:
+                    return json.loads(ln)
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    return None
+
+
+def _list_claude_sessions(now):
+    """Claude Code 会话 (~/.claude/projects)。source: claude-desktop / sdk-cli (按 entrypoint 字段)。"""
+    root = CLAUDE_PROJECTS
+    if not os.path.isdir(root):
+        return []
+    rows = []
+    for jf in glob.glob(os.path.join(root, "*", "*.jsonl")):
+        try:
+            mt = os.path.getmtime(jf)
+        except OSError:
+            continue
+        if now - mt > OFFLINE_WINDOW:
+            continue
+        # 项目名 = 记录里「最浅的 cwd」(项目根; agent 会 cd 进子目录, 但根是所有 cwd 的公共祖先)。
+        # entrypoint(来源)也顺带从头部拿。扫头部若干条即可(启动 cwd 在早期记录)。
+        cwd, entry = None, None
+        try:
+            with open(jf, "rb") as f:
+                for _ in range(80):
+                    ln = f.readline()
+                    if not ln:
+                        break
+                    try:
+                        o = json.loads(ln)
+                    except ValueError:
+                        continue
+                    if not isinstance(o, dict):
+                        continue
+                    c = o.get("cwd")
+                    if c and (cwd is None or c.count("/") < cwd.count("/")):
+                        cwd = c                        # 取路径层级最浅的 = 项目根
+                    entry = entry or o.get("entrypoint")
+        except OSError:
+            pass
+        last = None
+        for o in _tail_objects(jf):        # 尾部: 判忙/闲 + 补 cwd(头部没拿到时兜底)
+            last = o
+            c = o.get("cwd")
+            if c and (cwd is None or c.count("/") < cwd.count("/")):
+                cwd = c
+        proj = _basename_of(cwd) or os.path.basename(os.path.dirname(jf))
+        if not cwd and "worktrees-" in proj:        # 无 cwd 兜底: Paseo worktree 编码目录名 → 取 worktree 名
+            proj = proj.split("worktrees-", 1)[-1]
+        if last and (last.get("isApiErrorMessage") or last.get("type") == "error"):
+            state = "error"
+        elif (last or {}).get("type") == "user":       # 你/工具刚回, Claude 还在想 = 忙
+            state = "busy"
+        elif last is not None:
+            state = "ready"
+        else:
+            state = "busy" if now - mt < BUSY_WINDOW else "ready"
+        source = "claude-desktop" if entry == "claude-desktop" else "sdk-cli"
+        rows.append({"id": os.path.splitext(os.path.basename(jf))[0], "agent": "claude",
+                     "project": proj, "state": state, "source": source, "mtime": mt})
+    return rows
+
+
+def _list_codex_sessions(now):
+    """Codex 会话 (~/.codex/sessions/**/rollout-*.jsonl)。source=codex; 点击走 codex://threads/<id>。"""
+    root = os.path.expanduser("~/.codex/sessions")
+    if not os.path.isdir(root):
+        return []
+    rows = []
+    for jf in glob.glob(os.path.join(root, "**", "rollout-*.jsonl"), recursive=True):
+        try:
+            mt = os.path.getmtime(jf)
+        except OSError:
+            continue
+        if now - mt > OFFLINE_WINDOW:
+            continue
+        payload = (_read_first_json(jf) or {}).get("payload") or {}   # session_meta 在文件开头
+        sid = payload.get("id")
+        if not sid:
+            continue
+        proj = _basename_of(payload.get("cwd")) or ""
+        state = "busy" if now - mt < BUSY_WINDOW else "ready"          # Codex 暂按 mtime 判态
+        rows.append({"id": sid, "agent": "codex", "project": proj,
+                     "state": state, "source": "codex", "mtime": mt})
+    return rows
+
+
+def list_agent_sessions(limit=8):
+    """近期在跑的 Agent 会话 (Claude Code + Codex): [{id,agent,project,state,source,mtime}], 按最近活动排序、同(agent,项目)去重。
+    给手机「状态看板」用。source 决定点击去哪: claude-desktop→claude://resume · sdk-cli→终端窗口 · codex→codex://threads。
+    只读 mtime + 会话头/尾几条拿 cwd/来源, 不读对话正文。"""
+    now = time.time()
+    rows = _list_claude_sessions(now) + _list_codex_sessions(now)
+    rows.sort(key=lambda r: r["mtime"], reverse=True)
+    seen, uniq = set(), []
+    for r in rows:                          # 同 (agent, 项目) 多会话只留最近的
+        key = (r["agent"], r["project"])
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(r)
+    return uniq[:limit]
+
+
 async def status_pusher(websocket, gate):
     """周期性把 agent 状态推给已认证的手机端 (电脑 -> 手机)。"""
     loop = asyncio.get_running_loop()
@@ -548,9 +718,12 @@ async def status_pusher(websocket, gate):
         if ENABLE_STATUS and gate["authed"]:
             try:
                 result = await loop.run_in_executor(None, compute_all_status, gate.get("deep", False))
+                sess = await loop.run_in_executor(None, list_agent_sessions)
                 await websocket.send(json.dumps({
                     "type": "agent_status", "ts": int(time.time() * 1000),
                     "agents": result["agents"], "active": result["active"],
+                    # 状态看板: 正在跑的 Claude Code 会话 (去掉 mtime, 手机只用 id/agent/project/state)
+                    "sessions": [{k: s[k] for k in ("id", "agent", "project", "state", "source")} for s in sess],
                     # 顺带把当前辅助功能授权状态推给手机: 运行中被撤销授权也能在 ~3s 内提示(不必等重连)。
                     "ax": accessibility_ok(),
                 }))
@@ -690,6 +863,54 @@ async def handler(websocket, path=None):
                     await websocket.send(json.dumps({"type": "result", "reqId": rid, "ok": ok, "error": err}))
             elif mtype == "mouse":
                 do_mouse(msg)
+            elif mtype == "list_windows":
+                # 手机端「窗口选择器」: 枚举所有可聚焦窗口回给它 (AX, 不需屏幕录制)
+                wl = await loop.run_in_executor(None, list_windows)
+                await websocket.send(json.dumps({
+                    "type": "window_list", "reqId": msg.get("reqId"), "windows": wl,
+                }))
+                log.info(f"🪟 窗口列表: {len(wl)} 个")
+            elif mtype == "bind_current_window":
+                # 手机端点「绑定当前窗口」: 读电脑最前窗口的身份回给它 (只用 AX, 不需屏幕录制)
+                ident = await loop.run_in_executor(None, frontmost_window_identity)
+                await websocket.send(json.dumps({
+                    "type": "window_bound", "reqId": msg.get("reqId"),
+                    "ok": ident is not None,
+                    "app": (ident or {}).get("app"),
+                    "title": (ident or {}).get("title"),
+                    "windowId": (ident or {}).get("windowId"),
+                }))
+                log.info(f"🪟 绑定当前窗口: {ident}")
+            elif mtype == "focus_window":
+                # 点键跳窗: 把绑定的窗口切到最前
+                ok, err = await loop.run_in_executor(
+                    None, focus_window, msg.get("app"), msg.get("title"), msg.get("windowId"))
+                rid = msg.get("reqId")
+                if rid is not None:
+                    await websocket.send(json.dumps({"type": "result", "reqId": rid, "ok": ok, "error": err}))
+                log.info(f"🪟 聚焦窗口 app={msg.get('app')!r} title={msg.get('title')!r} → {'ok' if ok else err}")
+            elif mtype == "focus_session":
+                # 状态灯点击(旧·终端版): 按项目名聚焦运行该 Claude Code 会话的终端窗口
+                ok, err = await loop.run_in_executor(None, focus_session, msg.get("project"))
+                rid = msg.get("reqId")
+                if rid is not None:
+                    await websocket.send(json.dumps({"type": "result", "reqId": rid, "ok": ok, "error": err}))
+                log.info(f"🪟 聚焦会话 project={msg.get('project')!r} → {'ok' if ok else err}")
+            elif mtype == "resume_session":
+                # 状态灯点击(Claude 桌面版): claude://resume 深链在桌面版里打开该会话
+                ok, err = await loop.run_in_executor(None, resume_claude_session, msg.get("session"))
+                rid = msg.get("reqId")
+                if rid is not None:
+                    await websocket.send(json.dumps({"type": "result", "reqId": rid, "ok": ok, "error": err}))
+                log.info(f"🔗 恢复会话 claude://resume?session={msg.get('session')} → {'ok' if ok else err}")
+            elif mtype == "activate_session":
+                # 状态灯点击总入口: 按 source 分流 (codex→codex://threads · claude-desktop→claude://resume · sdk-cli→终端窗口)
+                ok, err = await loop.run_in_executor(
+                    None, activate_session, msg.get("session"), msg.get("source"), msg.get("project"))
+                rid = msg.get("reqId")
+                if rid is not None:
+                    await websocket.send(json.dumps({"type": "result", "reqId": rid, "ok": ok, "error": err}))
+                log.info(f"🎯 激活会话 source={msg.get('source')} id={msg.get('session')} proj={msg.get('project')!r} → {'ok' if ok else err}")
             elif mtype == "capture_start":
                 log.info("🎯 等待你在电脑键盘上按下要学习的键…(20秒内)")
                 loop = asyncio.get_running_loop()
@@ -999,6 +1220,293 @@ def accessibility_ok():
         return bool(AXIsProcessTrusted())
     except Exception:  # noqa: BLE001
         return True
+
+
+# ── 窗口聚焦 (Phase 1: 6 键跳窗) ─────────────────────────────────────
+# 让手机把某个键绑定到电脑上的一个「窗口」, 点键 = 把那个窗口切到最前。跨 App 通用
+# (Paseo 对话 / 终端里的 Claude·Codex / 浏览器都行), 不绑死任何一个客户端。
+# macOS: 读「最前窗口」标题只用 AX(辅助功能, 已授权), 不需要屏幕录制 → 隐私友好;
+#        聚焦用 CGWindowList 找进程 + AX raise + 激活 App。
+# Windows: ctypes user32 EnumWindows + SetForegroundWindow (尽力; 未在本机测过)。
+# 窗口编码(CGWindowNumber / HWND)重开会变, 所以主要按 app+title 重新查找, id 仅作快速命中。
+_NS_ACTIVATE_IGNORING_OTHER_APPS = 1 << 1
+
+
+def _mac_ax_focused_window_title(pid):
+    """AX 读某进程当前聚焦窗口标题 (只需辅助功能授权, 不需屏幕录制)。"""
+    try:
+        from ApplicationServices import (
+            AXUIElementCreateApplication, AXUIElementCopyAttributeValue,
+            kAXFocusedWindowAttribute, kAXTitleAttribute,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    app_el = AXUIElementCreateApplication(pid)
+    err, win = AXUIElementCopyAttributeValue(app_el, kAXFocusedWindowAttribute, None)
+    if err or win is None:
+        return None
+    err, title = AXUIElementCopyAttributeValue(win, kAXTitleAttribute, None)
+    return (str(title) if title is not None else None) if not err else None
+
+
+def _mac_focus_window(app, title, window_id=None):
+    """把 (app,title[,windowId]) 指向的窗口切到最前。命中顺序: 窗口编码 → app+title。"""
+    try:
+        from AppKit import NSRunningApplication
+        from ApplicationServices import (
+            AXUIElementCreateApplication, AXUIElementCopyAttributeValue,
+            AXUIElementPerformAction, AXUIElementSetAttributeValue,
+            kAXWindowsAttribute, kAXTitleAttribute, kAXMainAttribute, kAXRaiseAction,
+        )
+        import Quartz
+    except Exception as e:  # noqa: BLE001
+        return False, f"ax unavailable: {e}"
+    opts = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
+    wins = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []
+    pid = None
+    if window_id is not None:                       # 1) 先按窗口编码快速命中
+        for w in wins:
+            if int(w.get("kCGWindowNumber", -1)) == int(window_id):
+                pid = int(w.get("kCGWindowOwnerPID"))
+                title = w.get("kCGWindowName") or title
+                break
+    if pid is None:                                 # 2) 否则按 app(+title) 匹配
+        cands = [w for w in wins
+                 if str(w.get("kCGWindowOwnerName") or "") == app and w.get("kCGWindowLayer", 99) == 0]
+        exact = [w for w in cands if (w.get("kCGWindowName") or "") == title]
+        pick = exact or cands
+        if pick:
+            pid = int(pick[0].get("kCGWindowOwnerPID"))
+    if pid is None:                                 # 3) 仍没命中 → 按 App 名从运行中 App 找 (选择器路径; 覆盖最小化/离屏窗口, 免屏幕录制)
+        try:
+            from AppKit import NSWorkspace
+            for a in NSWorkspace.sharedWorkspace().runningApplications():
+                if str(a.localizedName() or "") == app:
+                    pid = int(a.processIdentifier())
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+    if pid is None:
+        return False, "window not found"
+    # 3) 在该进程的 AX 窗口里找标题匹配的, raise; 匹配不上退而取第一个
+    app_el = AXUIElementCreateApplication(pid)
+    err, wlist = AXUIElementCopyAttributeValue(app_el, kAXWindowsAttribute, None)
+    target = None
+    if not err and wlist:
+        for win in wlist:
+            e2, t = AXUIElementCopyAttributeValue(win, kAXTitleAttribute, None)
+            if not e2 and title and str(t or "") == title:
+                target = win
+                break
+        target = target or wlist[0]
+    if target is not None:
+        AXUIElementSetAttributeValue(target, kAXMainAttribute, True)
+        AXUIElementPerformAction(target, kAXRaiseAction)
+    # 4) 把 App 激活到最前
+    ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+    if ra is not None:
+        try:
+            ra.activateWithOptions_(_NS_ACTIVATE_IGNORING_OTHER_APPS)
+        except Exception:  # noqa: BLE001
+            try:
+                ra.activate()
+            except Exception:  # noqa: BLE001
+                pass
+    return True, None
+
+
+def _win_frontmost_identity():
+    import ctypes
+    u = ctypes.windll.user32
+    hwnd = u.GetForegroundWindow()
+    n = u.GetWindowTextLengthW(hwnd)
+    buf = ctypes.create_unicode_buffer(n + 1)
+    u.GetWindowTextW(hwnd, buf, n + 1)
+    return {"app": "", "title": buf.value, "windowId": int(hwnd), "pid": 0}
+
+
+def _win_focus_window(app, title, window_id=None):
+    import ctypes
+    u = ctypes.windll.user32
+    found = {"hwnd": None}
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def _cb(hwnd, _):
+        if window_id is not None and int(hwnd) == int(window_id):
+            found["hwnd"] = hwnd
+            return False
+        n = u.GetWindowTextLengthW(hwnd)
+        if n:
+            buf = ctypes.create_unicode_buffer(n + 1)
+            u.GetWindowTextW(hwnd, buf, n + 1)
+            if title and buf.value == title and u.IsWindowVisible(hwnd):
+                found["hwnd"] = hwnd
+                return False
+        return True
+
+    u.EnumWindows(_cb, 0)
+    if found["hwnd"]:
+        u.ShowWindow(found["hwnd"], 9)   # SW_RESTORE
+        u.SetForegroundWindow(found["hwnd"])
+        return True, None
+    return False, "window not found"
+
+
+def frontmost_window_identity():
+    """读电脑上『当前最前窗口』的身份 {app,title,windowId,pid}。给「绑定当前窗口」用。"""
+    if IS_MAC:
+        try:
+            from AppKit import NSWorkspace
+            import Quartz
+        except Exception:  # noqa: BLE001
+            return None
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if app is None:
+            return None
+        pid = int(app.processIdentifier())
+        appname = str(app.localizedName() or "")
+        title = _mac_ax_focused_window_title(pid) or ""
+        win_id = None
+        try:
+            opts = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
+            for w in Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []:
+                if int(w.get("kCGWindowOwnerPID", -1)) == pid and w.get("kCGWindowLayer", 99) == 0:
+                    if not title or (w.get("kCGWindowName") or "") == title:
+                        win_id = int(w.get("kCGWindowNumber"))
+                        break
+        except Exception:  # noqa: BLE001
+            pass
+        return {"app": appname, "title": title, "windowId": win_id, "pid": pid}
+    if platform.system() == "Windows":
+        try:
+            return _win_frontmost_identity()
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
+def focus_window(app, title, window_id=None):
+    """把 (app,title[,windowId]) 指向的窗口切到最前。返回 (ok, err)。"""
+    try:
+        if IS_MAC:
+            return _mac_focus_window(app or "", title or "", window_id)
+        if platform.system() == "Windows":
+            return _win_focus_window(app or "", title or "", window_id)
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+    return False, "unsupported platform"
+
+
+def _mac_list_windows():
+    """枚举所有普通 App 的窗口 (app,title,pid) —— 用 AX(辅助功能), 不需屏幕录制。给手机做窗口选择器。"""
+    try:
+        from AppKit import NSWorkspace, NSApplicationActivationPolicyRegular
+        from ApplicationServices import (
+            AXUIElementCreateApplication, AXUIElementCopyAttributeValue,
+            kAXWindowsAttribute, kAXTitleAttribute,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for a in NSWorkspace.sharedWorkspace().runningApplications():
+        if a.activationPolicy() != NSApplicationActivationPolicyRegular:
+            continue                                   # 只列有 Dock 图标的普通 App (跳过后台/agent)
+        pid = int(a.processIdentifier())
+        name = str(a.localizedName() or "")
+        el = AXUIElementCreateApplication(pid)
+        err, wins = AXUIElementCopyAttributeValue(el, kAXWindowsAttribute, None)
+        if err or not wins:
+            continue
+        for w in wins:
+            e2, t = AXUIElementCopyAttributeValue(w, kAXTitleAttribute, None)
+            title = str(t) if (not e2 and t) else ""
+            if title:                                  # 跳过无标题的工具窗/面板
+                out.append({"app": name, "title": title, "pid": pid})
+    return out
+
+
+def list_windows():
+    """列出电脑上所有可聚焦的窗口 (给手机「窗口选择器」)。返回 [{app,title,pid}]。"""
+    try:
+        if IS_MAC:
+            return _mac_list_windows()
+        # Windows: 后续用 EnumWindows 补 (当前先返回空, 手机端仍可用「绑定当前窗口」)
+    except Exception:  # noqa: BLE001
+        pass
+    return []
+
+
+# 常见终端 App —— 状态灯点击时优先在这些里找「运行 Claude Code 的窗口」。
+_TERMINAL_APPS = {"Terminal", "终端", "iTerm2", "iTerm", "WezTerm", "Alacritty",
+                  "kitty", "Ghostty", "Warp", "Hyper", "Tabby", "rio"}
+
+
+def resume_claude_session(session_id):
+    """状态灯点击(Claude 桌面版): 用 `claude://chat?session=<id>` 深链打开【已有】对话(OpenConversation 路由)。
+    注意: 不用 `resume` —— resume 会按 transcript【重建】一个新会话; chat 才是聚焦已有会话(经实测确认)。
+    session_id = ~/.claude/projects 下 transcript 文件名(会话 uuid)。返回 (ok, err)。"""
+    if not session_id:
+        return False, "no session"
+    url = f"claude://chat?session={session_id}"
+    try:
+        if IS_MAC:
+            subprocess.Popen(["open", url])
+        elif platform.system() == "Windows":
+            os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606
+        else:
+            subprocess.Popen(["xdg-open", url])
+        return True, None
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
+def codex_open_thread(thread_id):
+    """状态灯点击(Codex/ChatGPT 桌面版): 用 `codex://threads/<id>` 深链打开该对话线程。thread_id = rollout 会话 id。"""
+    if not thread_id:
+        return False, "no thread"
+    url = f"codex://threads/{thread_id}"
+    try:
+        if IS_MAC:
+            subprocess.Popen(["open", url])
+        elif platform.system() == "Windows":
+            os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606
+        else:
+            subprocess.Popen(["xdg-open", url])
+        return True, None
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
+def activate_session(session_id, source, project):
+    """状态灯点击总入口: 按来源分流。
+    codex → codex://threads(ChatGPT 桌面版) · claude-desktop → claude://resume(Claude 桌面版) · sdk-cli → 聚焦终端窗口。"""
+    if source == "codex":
+        return codex_open_thread(session_id)
+    if source == "claude-desktop":
+        return resume_claude_session(session_id)
+    return focus_session(project)          # sdk-cli (CLI/终端): 按项目名聚焦终端窗口
+
+
+def focus_session(project):
+    """状态灯点击(旧·终端版): 按「项目名」找正在运行该 Claude Code 会话的终端窗口并聚焦。
+    通用做法(不依赖 Paseo): 终端窗口标题通常含当前目录名, 据此匹配。优先终端类 App。返回 (ok, err)。"""
+    if not project:
+        return False, "no project"
+    try:
+        if not IS_MAC:
+            return False, "unsupported platform"
+        key = str(project).lower()
+        wins = _mac_list_windows()                       # [{app,title,pid}] (AX, 免屏幕录制)
+        # 只匹配「终端类 App」且标题含项目名 —— 避免把 Simulator/浏览器等含相同字样的窗口误焦。
+        # 找不到 = 该会话没有在终端里跑(Paseo 后台 / 桌面版)→ 不动, 不乱焦。
+        matches = [w for w in wins
+                   if w.get("app") in _TERMINAL_APPS and key in (w.get("title") or "").lower()]
+        if not matches:
+            return False, "no terminal window"
+        w = matches[0]
+        return _mac_focus_window(w["app"], w["title"], None)
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
 
 
 def ensure_macos_accessibility():

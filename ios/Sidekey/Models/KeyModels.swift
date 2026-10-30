@@ -16,13 +16,29 @@ struct KeyCap: Identifiable, Codable, Hashable {
     var tint: KeyTint? = nil           // 功能分组色 (nil = 跟随类型默认; 主要给「活泼」风格分组上色)
     var sendText: String? = nil        // 非空 = 点这个键直接「粘贴一段文字」(斜杠指令用, 如 /init)
     var icon: String? = nil            // SF Symbol 名 (键面 = 图标 + 英文; nil = 只显示文字)
+    var winApp: String? = nil          // kind == .window: 绑定窗口所属 App (如 "Paseo")
+    var winTitle: String? = nil        // kind == .window: 绑定窗口标题 (聚焦时按 app+title 重新查找)
+    var winId: Int? = nil              // kind == .window: 窗口编码 (快速命中; 窗口重开会变, 仅作快路径)
+    var slot: Int? = nil               // kind == .agentSlot: 显示 client.agentSessions 里第几个会话 (状态看板 6 灯)。必须是可选: 旧存档没有这个键, 非可选会让整份存档解码失败
 
     /// normal=普通/组合键 · layer=切层键 · record=录音(语言输入)
     /// permission=Claude Code 权限模式键 (点击展开权限面板, 键面实时显示当前模式)
     /// effort=Claude Code Effort 档位键 (点击展开 Effort 面板, 键面实时显示当前档位)
     /// trackpad=触控板区域 (占一整块网格; 正常模式下触摸=触控板手势, 编辑器里可拖拽/缩放)
     /// mouseButton=鼠标键 (code "left"=左键: 按住=down 松开=up, 轻点即单击+可拖; code "right"=右键: 点=右键单击)
-    enum Kind: String, Codable { case normal, layer, record, permission, effort, trackpad, mouseButton }
+    /// window=窗口快捷键 (绑定电脑上一个窗口: 点键=把该窗口切到最前; 跨 App 通用 —— Paseo 对话/终端/浏览器都行)
+    /// agentSlot=状态灯槽 (自动显示正在跑的第 slot 个 Claude Code 会话 + 项目名; 灯色=忙橙/待绿/闲灰; 点击用 claude://resume 深链在 Claude 桌面版打开该会话)
+    /// unknown=本版不认识的类型 (来自更新版本的存档): 灰色占位键, 不能发出按键; 整键原始数据在 rawUnknown 里原样保留 (见 KeyCapCoding.swift)。
+    enum Kind: String, Codable, CaseIterable { case normal, layer, record, permission, effort, trackpad, mouseButton, window, agentSlot, unknown }
+    var rawUnknown: UnknownKeyData? = nil   // kind == .unknown 时的整键原始数据; 其余情况恒为 nil
+}
+
+/// 本版不认识的键的原始数据: 原始 JSON 树 (数字保留原文) + 解码时的位置快照 (保存时只在位置真的被编辑过才改写位置字段)。
+struct UnknownKeyData: Hashable {
+    var tree: JSONValue
+    var col: Int, row: Int, colSpan: Int, rowSpan: Int
+    /// 解码时的 id 快照: 复制键换了新 id 时 (≠ 快照), 保存要把新 id 写进原始数据, 否则重载后副本又变回原键的 id。
+    var id: UUID? = nil
 }
 
 /// 按键的「功能分组色」。在「活泼」风格下给不同功能的键上不同色; 其它风格弱化为中性。
@@ -38,7 +54,8 @@ struct KeyLayer: Identifiable, Codable, Equatable {
     var keys: [KeyCap]
 
     /// 网格行数 = 最靠下的键的底边 (至少 1 行, 供渲染算总高)。
-    var rowCount: Int { max(1, keys.map { $0.row + $0.rowSpan }.max() ?? 0) }
+    /// 加法饱和: 读到异常大的坐标也不会整数溢出崩溃 (存档校验会把这类数据挡在恢复流程里, 这里是最后一道保险)。
+    var rowCount: Int { max(1, keys.map { k in let (v, o) = k.row.addingReportingOverflow(k.rowSpan); return o ? Int.max : v }.max() ?? 0) }
 }
 
 /// 内置默认布局 (网格版)。base 常用键 + more 功能层, 各 8 列。
@@ -102,14 +119,20 @@ enum BuiltinModes {
     /// v8: 触控板拆成「纯触摸面」+ 独立「左键/右键」按钮(.mouseButton); 触控板不再自带按钮条。
     /// v9: Vibe Coding 拆成单页(只留触控板页); 原第二页快捷键重做为独立「vibecoding键盘模式」。
     /// v10: 强制统一阵容(不论新老/是否编辑过) —— Vibe 只保留第一页 + 删除「鼠标模式」; 仅留 Vibe + vibecoding键盘模式。
-    static let version = 10
+    /// v11: 新增内置模式「Codex Micro」—— 对位 OpenAI Codex Micro 宏键盘真机排布(方形 4×4: 四角特色控件 + 6 颗辉光状态键 + 底部宽麦克风)。追加式种入 (addMissingBuiltins), 不动用户已有模式。
+    /// v12: 新增内置模式「笔记本键盘」(§4.9, 类型标识 .laptopKeyboard)。追加式种入, 按类型标识判断有没有 (不靠名字), 不动用户已有模式。
+    static let version = 12
 
     /// 顺序即默认顺序: 第一个 (Vibe) 为默认模式。鼠标模式 v10 起不再内置 (mouse() 仅供迁移识别/兼容旧检测器)。
-    static func makeAll() -> [Mode] { [vibe(), vibecodingKbd()] }
+    static func makeAll() -> [Mode] { [vibe(), vibecodingKbd(), codexMicro(), laptopKeyboard()] }
 
     static func vibe() -> Mode { Mode(name: "Vibe Coding", layers: [vibeBase()]) }
     static func vibecodingKbd() -> Mode { Mode(name: "vibecoding键盘模式", layers: [vibecodingKbdBase()]) }
+    static func codexMicro() -> Mode { Mode(name: "Codex Micro", layers: [codexMicroBase()]) }
     static func mouse() -> Mode { Mode(name: "鼠标模式", layers: [mouseBase()]) }
+    /// 「笔记本键盘」(§4.9): 键位固定 (附录键表), 不进网格编辑器、没有页和子页, 不生成大屏键位。
+    /// 存一页空的 base 只是为了让旧版本 (认不出类型标识的) 读到的是一个合法的空模式。
+    static func laptopKeyboard() -> Mode { Mode(name: "笔记本键盘", layers: [KeyLayer(id: "base", columns: 12, keys: [])], kind: .laptopKeyboard) }
 
     /// 鼠标模式: 单页。上方一整块触控板(只管触摸), 下方独立的左键/右键按钮。
     private static func mouseBase() -> KeyLayer {
@@ -155,6 +178,39 @@ enum BuiltinModes {
             KeyCap(label: "Backspace", code: "backspace", col: 3, row: 2, colSpan: 3),
             KeyCap(label: "Esc", code: "esc", col: 6, row: 2, colSpan: 3),
             KeyCap(label: "Enter", code: "enter", col: 9, row: 2, colSpan: 3, tint: .accent),
+        ])
+    }
+
+    /// 「Codex Micro」出厂布局 (v11 新增): 对位 OpenAI Codex Micro 宏键盘的真机排布 —— 方形 4×4 pad。
+    /// 真机四角是特色控件(左上触摸盘 / 右上摇杆 / 左下旋钮), 中间两排 6 颗彩色发光键 = agent 状态灯, 底部一条宽麦克风键。
+    /// Sidekey 没有触摸盘/摇杆/旋钮/状态灯这些硬件, 按「位置对位、就近取义」映射(不是 1:1 复刻硬件, 是复刻布局骨架):
+    ///   行0: [权限(⇧Tab 循环, 呼应触摸盘切态)] · [状态灯0] · [状态灯1] · [触控板(≈右上摇杆)]
+    ///   行1: 状态灯 2–5 —— [灯2][灯3][灯4][灯5]
+    ///   行2: 命令键 —— [/usage(≈⚡)] [Enter(≈✓, success 绿)] [Esc(≈✕, danger 红)] [/resume(≈⤢)]
+    ///   行3: [Effort(≈左下旋钮, 调思考档)] · [语音(≈底部宽麦克风, 占 2 格)] · [Backspace(≈右下 >_ 角)]
+    /// 中间 6 颗 = 真机 6 颗发光键 → Sidekey「状态灯槽」(.agentSlot): 自动显示正在跑的前 6 个 Claude Code 会话,
+    /// 灯色随状态(忙橙/待绿/闲灰), 点击聚焦运行它的终端窗口(按项目名匹配)。无需绑定, 数据来自电脑端周期推送。4 列网格。
+    private static func codexMicroBase() -> KeyLayer {
+        KeyLayer(id: "base", columns: 4, keys: [
+            // 行0: 左上触摸角 / 状态灯 0-1 / 右上摇杆角
+            KeyCap(label: "权限", col: 0, row: 0, kind: .permission),
+            KeyCap(label: "", col: 1, row: 0, kind: .agentSlot, slot: 0),
+            KeyCap(label: "", col: 2, row: 0, kind: .agentSlot, slot: 1),
+            KeyCap(label: "触控板", col: 3, row: 0, kind: .trackpad),
+            // 行1: 状态灯 2-5
+            KeyCap(label: "", col: 0, row: 1, kind: .agentSlot, slot: 2),
+            KeyCap(label: "", col: 1, row: 1, kind: .agentSlot, slot: 3),
+            KeyCap(label: "", col: 2, row: 1, kind: .agentSlot, slot: 4),
+            KeyCap(label: "", col: 3, row: 1, kind: .agentSlot, slot: 5),
+            // 行2: 命令键 (Enter=success 绿✓ / Esc=danger 红✕, 均走自带图标脸)
+            KeyCap(label: "/usage", col: 0, row: 2, tint: .coral, sendText: "/usage"),
+            KeyCap(label: "Enter", code: "enter", col: 1, row: 2, tint: .success),
+            KeyCap(label: "Esc", code: "esc", col: 2, row: 2, tint: .danger),
+            KeyCap(label: "/resume", col: 3, row: 2, tint: .coral, sendText: "/resume"),
+            // 行3: 旋钮→Effort / 宽麦克风→语音(.record 原生听写) / 右下角→Backspace
+            KeyCap(label: "Effort", col: 0, row: 3, kind: .effort),
+            KeyCap(label: "语音", col: 1, row: 3, colSpan: 2, kind: .record, tint: .accent),
+            KeyCap(label: "Backspace", code: "backspace", col: 3, row: 3, tint: .neutral),
         ])
     }
 

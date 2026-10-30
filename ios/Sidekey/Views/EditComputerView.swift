@@ -15,6 +15,8 @@ struct EditComputerView: View {
     @State private var host: String
     @State private var port: String
     @State private var token: String
+    /// 打开表单时 store 里的令牌 (令牌未知时是空): 没动过令牌框 = 保留 store 当前值, 不靠「是否为空」推断清空。
+    private let tokenOriginal: String
     @State private var fingerprint: String
     @State private var showScan = false
 
@@ -31,6 +33,7 @@ struct EditComputerView: View {
         _host = State(initialValue: existing?.host ?? prefill?.host ?? "")
         _port = State(initialValue: String(existing?.port ?? prefill?.port ?? 8765))
         _token = State(initialValue: existing?.token ?? "")
+        tokenOriginal = existing?.token ?? ""
         _fingerprint = State(initialValue: existing?.fingerprint ?? "")
     }
 
@@ -74,7 +77,7 @@ struct EditComputerView: View {
                             Spacer()
                             Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.textTertiary)
                         }
-                        .foregroundStyle(theme.accent)
+                        .foregroundStyle(theme.accentInk)
                         .padding(.horizontal, 16).frame(height: 52)
                         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.surfaceMuted))
                     }
@@ -98,13 +101,13 @@ struct EditComputerView: View {
                                 .modifier(OptIdentifier(id: "field.fingerprint"))
                             if !normalizedFP.isEmpty && !fpValid {
                                 Text("指纹应为 64 位十六进制 (当前 \(normalizedFP.count) 位)。")
-                                    .font(.system(size: 12)).foregroundStyle(theme.warning)
+                                    .font(.system(size: 12)).foregroundStyle(theme.warningText)
                             }
                         }
                         .padding(.horizontal, 16).padding(.vertical, 14)
                     }
                     Text("填了指纹 = 从第一次连接就严格校验电脑身份(最安全)。留空则首连「信任并记住」对方证书, 之后才严格校验。指纹可在电脑端用 --show-pairing-code 看到, 或直接扫码自动带上。")
-                        .font(.system(size: 12)).foregroundStyle(theme.textTertiary)
+                        .font(.system(size: 12)).foregroundStyle(theme.hint)
                         .padding(.horizontal, 4)
 
                     HStack(alignment: .top, spacing: 12) {
@@ -121,10 +124,13 @@ struct EditComputerView: View {
 
                     if existing != nil {
                         Button(role: .destructive) {
-                            if let e = existing { store.deleteComputer(id: e.id); onDeleted() }
+                            if let e = existing {
+                                guard store.deleteComputer(id: e.id) else { return }     // 至少要留一台电脑
+                                onDeleted()
+                            }
                             dismiss()
                         } label: {
-                            Text("删除这台电脑").font(.system(size: 15, weight: .medium)).foregroundStyle(theme.danger)
+                            Text("删除这台电脑").font(.system(size: 15, weight: .medium)).foregroundStyle(theme.dangerText)
                                 .frame(maxWidth: .infinity).frame(height: 44)
                         }
                         .buttonStyle(.plain)
@@ -139,6 +145,7 @@ struct EditComputerView: View {
                 .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 16)
         }
         .background(theme.bgGradient.ignoresSafeArea())
+        .onChange(of: store.discardGeneration) { _ in dismiss() }     // 持有本地草稿 (名称 / 地址 / 令牌) 的表单: 放弃修改时关闭, 不再能把被放弃的值应用回去
         .sheet(isPresented: $showScan) {
             PairingView(client: client) { payload in
                 if let h = payload.hosts.first { host = h }
@@ -149,6 +156,7 @@ struct EditComputerView: View {
                     name = payload.hosts.first ?? name
                 }
             }
+            .unsavedBanner()
         }
     }
 
@@ -173,13 +181,14 @@ struct EditComputerView: View {
     private func save() {
         guard !trimmedHost.isEmpty, let p = portValue else { return }
         let nm = name.trimmingCharacters(in: .whitespaces)
+        // 保存失败时修改仍保留在内存 (顶部「未保存」状态条), 照常回调并关闭。
         if let existing {
-            store.renameComputer(id: existing.id, to: nm.isEmpty ? existing.name : nm)
-            store.updateComputerConnection(id: existing.id, host: trimmedHost, port: p, token: token, fingerprint: normalizedFP)
+            let edit: LayoutStore.TokenEdit = token == tokenOriginal ? .keep : (token.isEmpty ? .clear : .set(token))
+            guard store.updateComputer(id: existing.id, name: nm, host: trimmedHost, port: p, tokenEdit: edit, fingerprint: normalizedFP) else { return }
             onSaved(existing.id)
         } else {
             let c = Computer.make(name: nm.isEmpty ? trimmedHost : nm, host: trimmedHost, port: p, token: token, fingerprint: normalizedFP)
-            store.addComputer(c)
+            guard store.addComputer(c) else { return }
             onSaved(c.id)
         }
         dismiss()

@@ -280,3 +280,33 @@
 
 /* built-in mode names — localized for display (model identity stays the zh key) */
 "vibecoding键盘模式" = "Vibe Coding · Keyboard";
+
+/* Codex Micro mode — voice key label */
+"语音" = "Voice";
+
+/* window shortcut keys (Phase 1: tap a key → focus that window on the computer) */
+"未绑定" = "Unbound";
+"未绑定窗口" = "No window bound";
+"窗口" = "Window";
+"绑定当前窗口" = "Bind current window";
+"读取中…" = "Reading…";
+"需要先连接电脑才能绑定窗口。" = "Connect to your computer first to bind a window.";
+"先在电脑上把想跳转的窗口(Paseo 对话 / 终端 / 浏览器都行)切到最前, 再点「绑定当前窗口」。之后点这个键, 电脑就会把那个窗口切到最前。" = "On your computer, bring the window you want (a Paseo chat, a terminal, a browser — anything) to the front, then tap Bind current window. After that, tapping this key brings that window to the front.";
+"从窗口列表选择" = "Pick from window list";
+"读取窗口列表…" = "Loading windows…";
+"或: 绑定当前最前窗口" = "Or: bind the frontmost window";
+"从列表挑一个窗口(Paseo 对话 / 终端 / 浏览器都行)。之后点这个键, 电脑就会把那个窗口切到最前。" = "Pick a window from the list (a Paseo chat, a terminal, a browser — anything). Then tapping this key brings that window to the front.";
+"选择窗口" = "Pick a window";
+"没有可选的窗口(确认电脑已连接、且有打开的窗口)" = "No windows to pick (make sure the computer is connected and has open windows)";
+
+/* 存档恢复 (§6.4) */
+"存档无法读取" = "Saved data can't be read";
+"原始数据已另外备份，没有被覆盖。你可以先导出它留作检查，或用全新数据继续使用（原来的电脑与键位需要重新配置）。" = "Your original data was backed up separately and has not been overwritten. You can export it for inspection, or continue with fresh data (you'll need to set up your computers and layouts again).";
+"导出原始数据" = "Export original data";
+"使用全新数据继续" = "Continue with fresh data";
+
+/* 连接状态角标 */
+"连接中" = "Connecting";
+"失败" = "Failed";
+"断开" = "Disconnected";
+"苹果风" = "Apple";

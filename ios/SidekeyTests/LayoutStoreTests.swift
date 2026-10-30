@@ -206,4 +206,14 @@ final class LayoutStoreTests: XCTestCase {
         XCTAssertEqual(decoded[0].keys[0].col, layers[0].keys[0].col)
         XCTAssertEqual(decoded[0].keys[0].id, layers[0].keys[0].id)
     }
+
+    // 旧版本(1.0)存下的按键没有 winApp / winTitle / winId / slot 这些新字段, 新版本必须照样能读,
+    // 否则整份存档解码失败 → 回退成默认数据 → 用户自定义的键位被覆盖。
+    func testDecodesKeyCapWithoutNewerFields() throws {
+        let json = #"{"id":"6F1C2D3E-0000-4000-8000-000000000001","label":"ESC","code":"esc","mods":[],"col":0,"row":0,"colSpan":1,"rowSpan":1,"kind":"normal"}"#
+        let cap = try JSONDecoder().decode(KeyCap.self, from: Data(json.utf8))
+        XCTAssertEqual(cap.code, "esc")
+        XCTAssertNil(cap.slot)
+        XCTAssertNil(cap.winApp)
+    }
 }

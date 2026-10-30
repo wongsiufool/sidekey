@@ -12,9 +12,69 @@ struct KeyTile: View {
     var selected: Bool = false
     var permissionMode: PermissionMode = .ask
     var effortLevel: EffortLevel = .high
+    var agentSessions: [AgentSession] = []      // 状态看板数据 (给 .agentSlot 键面)
     @Environment(\.sidekeyTheme) private var theme
 
+    @State private var breathe = false      // 状态灯呼吸动画开关
+
     var body: some View {
+        if cap.kind == .agentSlot { agentSlotBody } else { normalBody }
+    }
+
+    // 状态灯槽 (状态看板): 整颗键 = 呼吸灯。忙橙/待绿/闲灰; active(忙/待)时整键低↔高起伏 + 辉光。
+    private var agentSlotBody: some View {
+        let shape = RoundedRectangle(cornerRadius: theme.radiusKey, style: .continuous)
+        let i = cap.slot ?? 0
+        let s: AgentSession? = i < agentSessions.count ? agentSessions[i] : nil
+        let color = agentStateColor(s?.state)
+        let active = s != nil && s?.state != .offline
+        let fillOpacity = active ? (breathe ? 0.55 : 0.20) : (s == nil ? 0.05 : 0.14)
+        return shape.fill(color.opacity(fillOpacity))
+            .overlay(shape.strokeBorder(color.opacity(active ? 0.6 : 0.25), lineWidth: active ? 1.5 : 1))
+            .overlay(agentSlotLabel(s))
+            .overlay(alignment: .topTrailing) {              // 来源小图标: 桌面版 / 终端 / Codex
+                if let s {
+                    Image(systemName: agentSourceIcon(s.source))
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(theme.hint)
+                        .padding(5)
+                }
+            }
+            .shadow(color: active ? color.opacity(breathe ? 0.55 : 0.12) : .clear,
+                    radius: active ? (breathe ? 12 : 4) : 0)
+            .compositingGroup()
+            .opacity(enabled ? 1 : 0.5)
+            .onAppear { restartBreath(active) }
+            .onChange(of: s?.state) { st in restartBreath(st != nil && st != .offline) }
+    }
+
+    private func agentSourceIcon(_ source: String) -> String {
+        switch source {
+        case "claude-desktop": return "macwindow"                              // Claude 桌面版
+        case "codex":          return "chevron.left.forwardslash.chevron.right" // Codex/ChatGPT
+        default:               return "terminal"                                // sdk-cli (CLI/终端)
+        }
+    }
+
+    private func restartBreath(_ active: Bool) {
+        breathe = false
+        guard active else { return }
+        withAnimation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true)) { breathe = true }
+    }
+
+    @ViewBuilder private func agentSlotLabel(_ s: AgentSession?) -> some View {
+        if let s {
+            Text(s.project)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(theme.textPrimary)
+                .lineLimit(2).minimumScaleFactor(0.55).multilineTextAlignment(.center)
+                .padding(.horizontal, 5)
+        } else {
+            Text("—").font(.system(size: 16, weight: .medium)).foregroundStyle(theme.hint)
+        }
+    }
+
+    private var normalBody: some View {
         let shape = RoundedRectangle(cornerRadius: theme.radiusKey, style: .continuous)
         let p = theme.pressedShadow
         let isPermission = cap.kind == .permission
@@ -50,6 +110,8 @@ struct KeyTile: View {
                 trackpadFace
             } else if cap.kind == .mouseButton {
                 mouseFace
+            } else if cap.kind == .window {
+                windowFace
             } else if cap.kind == .layer {
                 layerFace
             } else if isBackspace {
@@ -92,18 +154,18 @@ struct KeyTile: View {
     }
 
     // 权限键: 锁盾 + 「权限 · X」+ 「⇧Tab」。X = 上次由本机请求的档位 (非 Claude 实时状态, App 读不到); 点开面板里有说明 (审计 M-8)。
+    // 行高变矮 (例如内屏窄窗口) 时按空间逐级省略: 先去掉副标题「⇧Tab」, 再去掉图标; 不缩字、不裁字。
     private var permissionFace: some View {
-        VStack(spacing: 3) {
-            Image(systemName: "lock.shield")
-                .font(.system(size: 21, weight: .medium))
-                .foregroundStyle(theme.accent)
-            Text(String(localized: "权限 · \(permissionMode.shortLabel)"))
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(theme.textPrimary)
-            Text("⇧Tab")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(theme.textTertiary)
+        let icon = Image(systemName: "lock.shield").font(.system(size: 21, weight: .medium)).foregroundStyle(theme.accentInk)
+        let title = Text(String(localized: "权限 · \(permissionMode.shortLabel)"))
+            .font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(theme.textPrimary)
+        let sub = Text("⇧Tab").font(.system(size: 10, weight: .medium)).foregroundStyle(theme.hint)
+        return ViewThatFits {
+            VStack(spacing: 3) { icon; title; sub }
+            VStack(spacing: 3) { icon; title }
+            title
         }
+        .minimumScaleFactor(1)
     }
 
     // 鼠标键 (左键/右键): 鼠标指针图标 + 名称。左键珊瑚、右键中性 —— 靠颜色区分, 不靠读字。
@@ -128,12 +190,36 @@ struct KeyTile: View {
     }
 
     // Effort 键: 仪表盘 + 「Effort · X」。X = 上次由本机设定的档位 (非 Claude 实时状态, App 读不到); 点开面板里有说明 (审计 M-8)。
+    // 行高变矮时先去掉图标, 不缩字、不裁字 (同权限键)。
     private var effortFace: some View {
-        VStack(spacing: 3) {
-            Image(systemName: sym("gauge.with.dots.needle.50percent", "speedometer"))
+        let icon = Image(systemName: sym("gauge.with.dots.needle.50percent", "speedometer"))
+            .font(.system(size: 21, weight: .medium)).foregroundStyle(theme.accentInk)
+        let title = microLabel(String(localized: "Effort · \(effortLevel.shortLabel)"), color: theme.textPrimary)
+        return ViewThatFits {
+            VStack(spacing: 3) { icon; title }
+            title
+        }
+        .minimumScaleFactor(1)
+    }
+
+    // 窗口快捷键 (Phase 1): macwindow 图标 + 绑定的窗口标题 (未绑定则灰显提示)。Phase 2 会在此叠加状态灯。
+    private var windowFace: some View {
+        let bound = !(cap.winTitle ?? "").isEmpty
+        return VStack(spacing: 4) {
+            Image(systemName: sym("macwindow.on.rectangle", "macwindow"))
                 .font(.system(size: 21, weight: .medium))
-                .foregroundStyle(theme.accent)
-            microLabel(String(localized: "Effort · \(effortLevel.shortLabel)"), color: theme.textPrimary)
+                .foregroundStyle(bound ? theme.accentInk : theme.hint)
+            microLabel(bound ? (cap.winTitle ?? "") : String(localized: "未绑定"),
+                       color: bound ? theme.textPrimary : theme.hint)
+        }
+    }
+
+    private func agentStateColor(_ st: AgentState?) -> Color {
+        switch st {
+        case .busy:  return theme.warning        // 忙 = 橙
+        case .ready: return theme.success         // 该你了 = 绿
+        case .error: return theme.danger          // 出错 = 红
+        default:     return theme.textTertiary    // 闲 / 无 = 灰
         }
     }
 
@@ -157,7 +243,7 @@ struct KeyTile: View {
                 .frame(width: 16, height: 12)
             Text(loc(cap.label))
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentInk)
         }
     }
 
@@ -167,8 +253,8 @@ struct KeyTile: View {
         let sub: String? = (!cap.label.isEmpty && cap.label != glyph) ? loc(cap.label) : nil
         let symbol = ["up": "arrow.up", "down": "arrow.down", "left": "arrow.left", "right": "arrow.right"][cap.code.lowercased()] ?? "arrow.up"
         return VStack(spacing: 4) {
-            Image(systemName: symbol).font(.system(size: 26, weight: .medium)).foregroundStyle(theme.accent)
-            if let sub { Text(sub).font(.system(size: 10, weight: .medium)).foregroundStyle(theme.textTertiary) }
+            Image(systemName: symbol).font(.system(size: 26, weight: .medium)).foregroundStyle(theme.accentInk)
+            if let sub { Text(sub).font(.system(size: 10, weight: .medium)).foregroundStyle(theme.hint) }
         }
     }
 
@@ -216,7 +302,8 @@ struct KeyTile: View {
         let shortcut = shortcutTitle
         let titleIsShortcut = shortcut != nil
         let title = shortcut ?? plainTitle
-        let showSubtitle = hasLabel && loc(cap.label) != title   // 用本地化后的标签比较, 避免 title/副标重复 (L-2)
+        // 用本地化后的标签比较, 避免 title/副标重复 (L-2); 去掉空格再比: 标签「⌘C」和快捷键标题「⌘ C」是同一个内容, 只显示一次
+        let showSubtitle = hasLabel && Self.squashed(loc(cap.label)) != title.map(Self.squashed)
         return VStack(spacing: 4) {
             if let title {
                 Text(title)
@@ -256,6 +343,8 @@ struct KeyTile: View {
             && cap.code.count == 1
             && cap.code.range(of: "^[0-9a-zA-Z]$", options: .regularExpression) != nil
     }
+
+    private static func squashed(_ s: String) -> String { s.filter { !$0.isWhitespace } }
 
     /// 仅当按键具有修饰键或可识别的特殊键码时显示快捷键标题，避免把普通「Home」重复显示两次。
     private var shortcutTitle: String? {
@@ -306,16 +395,23 @@ struct KeyTile: View {
     /// (填充, 文字)。录音键 = accentLight + accent; layer = 珊瑚实心; permission = 白底(描边在 body); normal 按 tint/修饰键/普通。
     private var resolved: (AnyShapeStyle, Color) {
         switch cap.kind {
-        case .record:     return (AnyShapeStyle(theme.accentLight), theme.accent)
+        case .record:     return (AnyShapeStyle(theme.accentLight), theme.accentInk)
         case .layer:      return (AnyShapeStyle(theme.accent), theme.accentText)
         case .permission: return (AnyShapeStyle(theme.keyFill), theme.keyText)
         case .trackpad:   return (AnyShapeStyle(theme.surfaceMuted), theme.textSecondary)
         case .mouseButton:                              // 左键 = 浅珊瑚强调; 右键 = 中性白键
             return cap.code.lowercased() == "right" ? (AnyShapeStyle(theme.keyFill), theme.keyText)
-                                                    : (AnyShapeStyle(theme.accentLight), theme.accent)
+                                                    : (AnyShapeStyle(theme.accentLight), theme.accentInk)
         case .effort:
             if let t = cap.tint { return theme.tintStyle(t) }
             return (AnyShapeStyle(theme.keyFill), theme.keyText)
+        case .window:
+            if let t = cap.tint { return theme.tintStyle(t) }
+            return (AnyShapeStyle(theme.keyFill), theme.keyText)
+        case .agentSlot:                                 // 状态灯槽: 中性底, 状态色靠圆点
+            return (AnyShapeStyle(theme.keyFill), theme.keyText)
+        case .unknown:                                   // 本版不认识的键: 灰色占位
+            return (AnyShapeStyle(theme.surfaceMuted), theme.textTertiary)
         case .normal:
             if let t = cap.tint { return theme.tintStyle(t) }
             return isModifierOnly ? (AnyShapeStyle(theme.keyModFill), theme.keyModText)
@@ -352,14 +448,18 @@ struct KeyCapButton: View {
     var repeatable: Bool = false
     var permissionMode: PermissionMode = .ask
     var effortLevel: EffortLevel = .high
+    var agentSessions: [AgentSession] = []      // 状态看板数据 (透传给 KeyTile)
     let action: () -> Void
 
     @Environment(\.scenePhase) private var scenePhase
-    @State private var pressed = false
+    @Environment(\.inputGuard) private var inputGuard
+    @State private var guardID = UUID()
+    @State private var life = PressLifecycle()      // 这次按压是否有效 / 是否进入过连发 (决定松手要不要补一次轻点)
     @State private var repeating = false
-    @State private var didRepeat = false    // 这次按压是否真的进入过连发 (决定松手要不要补一次轻点)
     @State private var pressID = 0
     @State private var repeatTask: Task<Void, Never>?
+
+    private var pressed: Bool { life.pressed }
 
     // 连发起始延迟: Backspace/方向键稍短(更跟手地删除/移动), 其它键较长, 避免正常轻点被当成长按。
     private var repeatDelayNanos: UInt64 {
@@ -368,35 +468,33 @@ struct KeyCapButton: View {
 
     var body: some View {
         KeyTile(cap: cap, enabled: enabled, pressed: pressed, repeating: repeating,
-                permissionMode: permissionMode, effortLevel: effortLevel)
+                permissionMode: permissionMode, effortLevel: effortLevel, agentSessions: agentSessions)
             .animation(.easeOut(duration: 0.08), value: pressed)
             .overlay(KeyPressTracker(onDown: pressDown, onUp: pressUp, onCancel: cancelPress))
-            .onDisappear { cancelPress() }
+            .onAppear { inputGuard?.register(guardID) { cancelPress() } }   // §5.2: 布局变化时停掉本键的连发
+            .onDisappear { cancelPress(); inputGuard?.unregister(guardID) }
             .onChange(of: scenePhase) { phase in if phase != .active { cancelPress() } }
             .onChange(of: enabled) { on in if !on { cancelPress() } }
     }
 
     // MARK: - 按压生命周期 (来自 KeyPressTracker, 均在主线程)
     private func pressDown() {
-        guard enabled, !pressed else { return }   // 未连接(禁用)键不响应、不闪
-        pressed = true
-        didRepeat = false
+        // 未连接(禁用)键不响应、不闪; 冻结期间 (§5.2) 拒绝新输入
+        guard life.down(enabled: enabled, frozen: inputGuard?.frozen == true) else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         if repeatable { startRepeat() }
     }
 
     private func pressUp() {
-        let fired = didRepeat                 // 真连发过 → 松手不再补轻点
         stopRepeat()
-        let shouldFire = enabled && !fired
-        pressed = false
-        if shouldFire { action() }
+        // 被取消 (布局变化等) 的按压, 后到的松手不再触发; 真连发过 → 松手不再补轻点
+        if life.up(enabled: enabled) { action() }
     }
 
     /// 滑动翻页 / 移出键面 / 被系统取消 / 退后台 / 断连 —— 统一取消本次按压, 不触发、不卡连发。
     private func cancelPress() {
         stopRepeat()
-        pressed = false
+        life.cancel()
     }
 
     private func startRepeat() {
@@ -408,7 +506,7 @@ struct KeyCapButton: View {
             try? await Task.sleep(nanoseconds: delay)
             guard !Task.isCancelled, myID == pressID, pressed else { return }
             repeating = true
-            didRepeat = true
+            life.markRepeating()
             while !Task.isCancelled, myID == pressID, pressed {
                 action()
                 try? await Task.sleep(nanoseconds: 90_000_000)
@@ -427,7 +525,55 @@ struct KeyCapButton: View {
 /// 可靠的「按下/松开/取消」跟踪 (UIKit UILongPressGestureRecognizer, minimumPressDuration=0)。
 /// 关键: `cancelsTouchesInView=false` + 允许与其它手势同时识别 → 不挡父级左右滑翻页;
 /// UIKit 保证 .began 必配一个 .ended/.cancelled/.failed, 所以 onUp/onCancel 一定会来, pressed 不会卡死。
-private struct KeyPressTracker: UIViewRepresentable {
+struct KeyPressTracker: UIViewRepresentable {
+    enum EndAction: Equatable { case up, cancel, none }
+
+    /// `.ended` 时怎么处理 (纯函数, 便于单测): 每一次按压都必须以 up 或 cancel 之一结束。
+    /// - 中途已经取消过 (alreadyMoved): 什么都不做 (取消回调已经调用过);
+    /// - 允许取消 (cancelOnMove) 且到 .ended 才发现移动太远: 要取消 —— 否则既不松手也不取消, 按压状态一直为 true;
+    /// - 其余: 正常松手。
+    static func endAction(cancelOnMove: Bool, alreadyMoved: Bool, movedTooFarNow: Bool) -> EndAction {
+        if alreadyMoved { return .none }
+        if cancelOnMove, movedTooFarNow { return .cancel }
+        return .up
+    }
+
+    /// 一次触摸的事件 → 动作 (纯状态机, Coordinator 直接用它, 单测覆盖所有结束路径)。
+    /// 保证: 每个 began 对应恰好一次 up 或至少一次 cancel (取消是幂等的), 不会既不松手也不取消。
+    struct Machine: Equatable {
+        enum Event: Equatable {
+            case began
+            case changed(tooFar: Bool)
+            case ended(tooFar: Bool)
+            case cancelled                  // .cancelled / .failed (系统取消、被别的手势抢走)
+        }
+        enum Action: Equatable { case down, up, cancel }
+
+        private(set) var moved = false
+
+        mutating func handle(_ e: Event, cancelOnMove: Bool) -> [Action] {
+            switch e {
+            case .began:
+                moved = false
+                return [.down]
+            case .changed(let tooFar):
+                if cancelOnMove, !moved, tooFar { moved = true; return [.cancel] }       // 已滑动 → 取消本键 (翻页由父级手势接手)
+                return []
+            case .ended(let tooFar):
+                switch KeyPressTracker.endAction(cancelOnMove: cancelOnMove, alreadyMoved: moved, movedTooFarNow: tooFar) {
+                case .up: return [.up]
+                case .cancel: moved = true; return [.cancel]
+                case .none: return []
+                }
+            case .cancelled:
+                moved = true
+                return [.cancel]
+            }
+        }
+    }
+
+    /// false = 手指移动不取消 (鼠标左键: 按住后另一只手在触控板上拖, 这只手指可以在键上滑动但仍算按住)。
+    var cancelOnMove: Bool = true
     let onDown: () -> Void
     let onUp: () -> Void
     let onCancel: () -> Void
@@ -450,7 +596,6 @@ private struct KeyPressTracker: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: KeyPressTracker
-        private var moved = false
         private var start: CGPoint = .zero   // 触地点; 位移超阈值即视为滑动 → 取消本键, 让位给翻页
         init(_ p: KeyPressTracker) { parent = p }
 
@@ -462,25 +607,25 @@ private struct KeyPressTracker: UIViewRepresentable {
             return abs(p.x - start.x) > 12 || abs(p.y - start.y) > 16
         }
 
+        private var machine = Machine()
+
         @objc func handle(_ g: UILongPressGestureRecognizer) {
+            let event: Machine.Event
             switch g.state {
             case .began:
-                moved = false
                 start = g.view.map { g.location(in: $0) } ?? .zero
-                parent.onDown()
-            case .changed:
-                if !moved, movedTooFar(g) {
-                    moved = true
-                    parent.onCancel()        // 已滑动 → 取消本键 (翻页由父级同时识别的手势接手)
+                event = .began
+            case .changed: event = .changed(tooFar: movedTooFar(g))
+            case .ended: event = .ended(tooFar: movedTooFar(g))
+            case .cancelled, .failed: event = .cancelled
+            default: return
+            }
+            for a in machine.handle(event, cancelOnMove: parent.cancelOnMove) {
+                switch a {
+                case .down: parent.onDown()
+                case .up: parent.onUp()
+                case .cancel: parent.onCancel()
                 }
-            case .ended:
-                // 兜底: 若没收到中途 .changed 就直接松手, 这里再判一次位移, 避免滑动也补发一次。
-                if !moved, movedTooFar(g) { moved = true }
-                if !moved { parent.onUp() }
-            case .cancelled, .failed:
-                parent.onCancel()
-            default:
-                break
             }
         }
 

@@ -8,15 +8,18 @@ struct DictationView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.sidekeyTheme) private var theme
 
-    @State private var text = ""
-    @FocusState private var focused: Bool
+    /// 窗口级草稿, 和内屏语音面板共用 (§5.1: 跨屏文字不丢, M3 审计 B7)。
+    @ObservedObject var draft: VoiceDraft
     @AppStorage("sidekey.dictation.autoEnter") private var autoEnter = false
-    @State private var sending = false        // 正在等电脑端回执
-    @State private var sendError: String?     // 失败原因 (审计 M-5: 失败不丢文字)
+    private var sending: Bool { draft.isSending }
+    /// 失败 / 不确定的原因 (审计 M-5: 失败不丢文字)
+    private var sendError: String? {
+        switch draft.state { case .failed(let m), .uncertain(let m): return m; default: return nil }
+    }
     @State private var copiedToPhone = false  // 已把文字复制到手机剪贴板
 
     private var connected: Bool { client.status == .connected }
-    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmed: String { draft.text.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,17 +36,14 @@ struct DictationView: View {
                     waveform
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("识别预览").font(.system(size: 13, weight: .medium)).foregroundStyle(theme.textTertiary)
+                        Text("识别预览").font(.system(size: 13, weight: .medium)).foregroundStyle(theme.hint)
                         SoftPanel {
-                            TextEditor(text: $text)
-                                .scrollContentBackground(.hidden)
-                                .font(.system(size: 17)).foregroundStyle(theme.textPrimary)
+                            VoiceTextView(draft: draft, fontSize: 17, textColor: UIColor(theme.textPrimary), identifier: "phoneVoiceText")
                                 .frame(minHeight: 90)
-                                .focused($focused)
                                 .overlay(alignment: .topLeading) {
-                                    if text.isEmpty {
+                                    if draft.text.isEmpty {
                                         Text("说点什么, 比如「帮我总结这段代码」")
-                                            .font(.system(size: 17)).foregroundStyle(theme.textTertiary)
+                                            .font(.system(size: 17)).foregroundStyle(theme.hint)
                                             .padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
                                     }
                                 }
@@ -60,14 +60,14 @@ struct DictationView: View {
 
                     if !connected {
                         Text("⚠️ 未连接电脑, 请先回主界面连接。")
-                            .font(.system(size: 13)).foregroundStyle(theme.warning)
+                            .font(.system(size: 13)).foregroundStyle(theme.warningText)
                     }
 
                     if let sendError {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(alignment: .top, spacing: 8) {
                                 Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.system(size: 14)).foregroundStyle(theme.danger)
+                                    .font(.system(size: 14)).foregroundStyle(theme.dangerText)
                                 Text(sendError).font(.system(size: 13)).foregroundStyle(theme.textSecondary)
                             }
                             Button {
@@ -76,7 +76,7 @@ struct DictationView: View {
                             } label: {
                                 Label(copiedToPhone ? "已复制到手机" : "复制到手机剪贴板",
                                       systemImage: copiedToPhone ? "checkmark" : "doc.on.doc")
-                                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.accent)
+                                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.accentInk)
                             }
                             .buttonStyle(.plain)
                         }
@@ -94,14 +94,15 @@ struct DictationView: View {
                 .padding(.horizontal, 20).padding(.top, 6).padding(.bottom, 12)
         }
         .background(theme.bgGradient.ignoresSafeArea())
-        .onAppear { focused = true }
-        .onChange(of: text) { _ in            // 编辑/重新听写后清掉旧错误与复制态
-            if sendError != nil { sendError = nil; copiedToPhone = false }
+
+        .onChange(of: draft.text) { _ in copiedToPhone = false }       // 编辑 / 重新听写后清掉复制态 (旧错误由草稿自己清)
+        .onChange(of: draft.successCount) { _ in                         // 只有请求真的成功才关闭 (失败后清空文字不算)
+            if closeOnSuccess { closeOnSuccess = false; dismiss() }
         }
     }
 
     private var micButton: some View {
-        Button { focused = true } label: {
+        Button { draft.wantsFocus = true } label: {
             ZStack {
                 ForEach(0..<2) { i in
                     Circle().stroke(theme.accent.opacity(0.18 - Double(i) * 0.07), lineWidth: 2)
@@ -111,7 +112,7 @@ struct DictationView: View {
                     .fill(theme.surface).raisedShadow(theme)
                     .frame(width: 148, height: 148)
                     .overlay(RoundedRectangle(cornerRadius: 36, style: .continuous).strokeBorder(theme.hairline, lineWidth: 1))
-                    .overlay(Image(systemName: "mic.fill").font(.system(size: 58, weight: .medium)).foregroundStyle(theme.accent))
+                    .overlay(Image(systemName: "mic.fill").font(.system(size: 58, weight: .medium)).foregroundStyle(theme.accentInk))
             }
             .frame(height: 182)
         }
@@ -132,32 +133,13 @@ struct DictationView: View {
         return CGFloat(p[i % p.count])
     }
 
+    @State private var closeOnSuccess = false
+
     private func send() {
-        guard !trimmed.isEmpty, !sending else { return }
-        let payload = trimmed
-        sending = true
-        sendError = nil
         copiedToPhone = false
-        // 等电脑端回执再决定: 打出来了才清空+关闭; 没打出来就保留文字 + 给原因 + 可重试/复制 (审计 M-5)。
-        client.sendPasteTracked(payload) { ok, code in
-            sending = false
-            if ok {
-                if autoEnter { client.sendKey(KeyCap(label: "Enter", code: "enter")) }
-                text = ""
-                dismiss()
-            } else {
-                sendError = Self.failMessage(code)
-            }
-        }
+        closeOnSuccess = true
+        draft.send(via: client, autoEnter: autoEnter)
     }
 
-    private static func failMessage(_ code: String?) -> String {
-        switch code {
-        case "ax":           return String(localized: "电脑还没授权「辅助功能」, 文字没打出去。先在 Mac 上授权, 再点重试。")
-        case "clipboard":    return String(localized: "电脑剪贴板暂时不可用, 没能粘贴。可重试, 或先复制到手机备用。")
-        case "timeout":      return String(localized: "电脑没有及时回应, 不确定是否打出。文字已保留, 可重试或复制到手机。")
-        case "disconnected": return String(localized: "和电脑断开了, 没发出去。重连后重试, 文字已保留。")
-        default:             return String(localized: "发送失败, 文字已保留。可重试, 或先复制到手机。")
-        }
-    }
+    static func failMessage(_ code: String?) -> String { VoiceDraft.failMessage(code) }
 }

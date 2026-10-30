@@ -38,7 +38,7 @@ struct ConnectionSheet: View {
                             Spacer(minLength: 0)
                             Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
                         }
-                        .foregroundStyle(theme.accent)
+                        .foregroundStyle(theme.accentInk)
                         .padding(.horizontal, 14).padding(.vertical, 12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(RoundedRectangle(cornerRadius: theme.radiusCard, style: .continuous)
@@ -60,7 +60,7 @@ struct ConnectionSheet: View {
 
                     if !newlyDiscovered.isEmpty {
                         Text("发现的电脑 (未保存)")
-                            .font(.system(size: 13, weight: .medium)).foregroundStyle(theme.textTertiary)
+                            .font(.system(size: 13, weight: .medium)).foregroundStyle(theme.hint)
                             .padding(.top, 4)
                         LazyVStack(spacing: 12) {
                             ForEach(newlyDiscovered) { discoveredCard($0) }
@@ -88,21 +88,24 @@ struct ConnectionSheet: View {
         }
         .presentationDetents([.large])
         .sheet(isPresented: $showScan) {
-            PairingView(client: client) { handlePaired($0) }
+            PairingView(client: client) { handlePaired($0) }.unsavedBanner()
         }
         .sheet(isPresented: $addManually) {
             EditComputerView(store: store, client: client, existing: nil,
                              onSaved: { selectAndConnect($0) }, onDeleted: { reconcileConnection() })
+                .unsavedBanner(store)
         }
         .sheet(item: $editing) { c in
             // 删除当前已连电脑也必须过连接协调器, 否则 socket 仍指向被删电脑 (修审计 H-2)。
             EditComputerView(store: store, client: client, existing: c,
                              onSaved: { selectAndConnect($0) }, onDeleted: { reconcileConnection() })
+                .unsavedBanner(store)
         }
         .sheet(item: $prefillServer) { s in
             EditComputerView(store: store, client: client, existing: nil,
                              prefill: (name: displayName(s), host: s.host, port: s.port),
                              onSaved: { selectAndConnect($0) }, onDeleted: { reconcileConnection() })
+                .unsavedBanner(store)
         }
         .sheet(isPresented: $showGuide) {
             SetupGuideView()        // 从电脑列表再次打开引导;「现在扫码」只需关引导回到本列表
@@ -126,7 +129,7 @@ struct ConnectionSheet: View {
                     StatusPill(text: statusText, dotColor: statusColor)
                 }
                 Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme.textTertiary)
+                    .foregroundStyle(theme.hint)
             }
             .padding(16)
             .frame(minHeight: 92)
@@ -184,7 +187,7 @@ struct ConnectionSheet: View {
     private func actionButton(_ title: String, filled: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title).font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(filled ? .white : theme.accent)
+                .foregroundStyle(filled ? theme.accentText : theme.accentInk)
                 .frame(maxWidth: .infinity).frame(height: 40)
                 .background(Capsule().fill(filled ? theme.accent : theme.surface))
                 .overlay(Capsule().strokeBorder(filled ? Color.clear : theme.accent.opacity(0.5), lineWidth: 1))
@@ -201,7 +204,7 @@ struct ConnectionSheet: View {
                     Text("\(s.host):\(String(s.port)) · \(String(localized: "未配对"))").font(.system(size: 13)).foregroundStyle(theme.textSecondary)
                 }
                 Spacer(minLength: 6)
-                Image(systemName: "qrcode.viewfinder").font(.system(size: 18, weight: .semibold)).foregroundStyle(theme.accent)
+                Image(systemName: "qrcode.viewfinder").font(.system(size: 18, weight: .semibold)).foregroundStyle(theme.accentInk)
             }
             .padding(16)
             .frame(minHeight: 92)
@@ -218,7 +221,7 @@ struct ConnectionSheet: View {
     }
 
     private func selectAndConnect(_ id: UUID) {
-        store.selectComputer(id)
+        guard store.selectComputer(id) else { return }       // 电脑已不存在才会失败
         reconcileConnection()
     }
 
@@ -226,6 +229,8 @@ struct ConnectionSheet: View {
     /// 没有可连电脑就断开; 否则交给 `client.connect(to:)` —— 它幂等: 目标/配置没变不打断,
     /// 换了电脑或同一台改了地址/令牌/指纹就重连 (修审计 H-1/H-2: 不再向旧 socket 发键)。
     private func reconcileConnection() {
+        store.retryUnreadableTokens()
+        if let cur = store.currentComputer, store.isTokenUnknown(cur.id) { client.disconnect(); return }    // 令牌暂时读不出来: 不按「没有令牌」去连接
         guard let c = store.currentComputer, !c.host.isEmpty else {
             client.disconnect(); return
         }

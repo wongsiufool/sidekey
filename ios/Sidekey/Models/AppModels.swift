@@ -7,6 +7,9 @@ struct Mode: Identifiable, Codable {
     var id: UUID = UUID()
     var name: String                  // 显示名, 如「Sidekey」「工作」
     var layers: [KeyLayer]            // 复用现有 KeyLayer / KeyCap
+    var kind: ModeKind = .grid        // 稳定的类型标识 (§4.9): 不靠名字认模式, 用户可以自建同名模式
+
+    private enum CodingKeys: String, CodingKey { case id, name, layers, kind }
 
     /// 新建一个模式: 默认给一套 base + more 层, 直接能用。
     static func makeDefault(name: String) -> Mode {
@@ -35,5 +38,43 @@ struct Computer: Identifiable, Codable {
         let modes = BuiltinModes.makeAll()        // [Vibe, vibecoding键盘], Vibe 在前
         return Computer(name: name, host: host, port: port, token: token,
                         fingerprint: fingerprint, modes: modes, lastModeID: modes.first?.id)
+    }
+}
+
+/// 模式类型。grid=可编辑的网格键位 (现有全部模式); laptopKeyboard=内置「笔记本键盘」(M3 起使用, 键位固定, 不进 §6)。
+/// 读到本版不认识的标识时记住原字符串 (.unknown), 保存时原样写回, 不让整份存档读取失败 (§6.4)。
+enum ModeKind: Hashable, Codable {
+    case grid, laptopKeyboard
+    case unknown(String)
+
+    init(from decoder: Decoder) throws {
+        let s = try decoder.singleValueContainer().decode(String.self)
+        switch s {
+        case "grid": self = .grid
+        case "laptopKeyboard": self = .laptopKeyboard
+        default: self = .unknown(s)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .grid: try c.encode("grid")
+        case .laptopKeyboard: try c.encode("laptopKeyboard")
+        case .unknown(let s): try c.encode(s)
+        }
+    }
+}
+
+extension Mode {
+    /// 老存档没有 kind (按网格模式)。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        kind = try c.decodeIfPresent(ModeKind.self, forKey: .kind) ?? .grid     // 旧存档没有 kind: 网格模式
+        // 网格模式必须有 layers (缺失 = 结构损坏, 不静默当空); 笔记本键盘等固定键位的模式没有页
+        layers = kind == .grid ? try c.decode([KeyLayer].self, forKey: .layers)
+                               : (try c.decodeIfPresent([KeyLayer].self, forKey: .layers) ?? [])
     }
 }

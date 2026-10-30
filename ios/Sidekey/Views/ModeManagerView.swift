@@ -6,6 +6,7 @@ struct ModeManagerView: View {
     var onSelect: (UUID) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @Environment(\.sidekeyTheme) private var theme
+    @Environment(\.screenKind) private var screenKind
 
     @State private var renamingID: UUID?
     @State private var renameText = ""
@@ -13,7 +14,8 @@ struct ModeManagerView: View {
     @State private var newModeName = ""
 
     private let icons = ["cube.fill", "briefcase.fill", "display", "macwindow", "keyboard", "wand.and.stars"]
-    private var modes: [Mode] { store.currentComputer?.modes ?? [] }
+    /// 笔记本键盘只在内屏的模式列表里出现 (§4.9); 手机屏 (外屏、普通 iPhone) 不提供。
+    private var modes: [Mode] { (store.currentComputer?.modes ?? []).filter { screenKind == .inner || $0.kind != .laptopKeyboard } }
     private var otherComputers: [Computer] { store.computers.filter { $0.id != store.currentComputerID } }
 
     var body: some View {
@@ -29,7 +31,7 @@ struct ModeManagerView: View {
                         modeCard(m, idx: idx)
                     }
                     Text("在 ⚙️ 编辑里可改每个模式的按键。")
-                        .font(.system(size: 12)).foregroundStyle(theme.textTertiary)
+                        .font(.system(size: 12)).foregroundStyle(theme.hint)
                         .frame(maxWidth: .infinity, alignment: .center).padding(.top, 4)
                 }
                 .padding(.horizontal, 20).padding(.bottom, 16)
@@ -45,7 +47,7 @@ struct ModeManagerView: View {
         .alert("新建模式", isPresented: $addingMode) {
             TextField("模式名称, 如 工作", text: $newModeName).autocorrectionDisabled()
             Button("创建") {
-                if let id = store.addMode(named: newModeName) { store.selectMode(id); onSelect(id) }
+                if let id = store.addMode(named: newModeName), store.selectMode(id) { onSelect(id) }
                 newModeName = ""
             }
             Button("取消", role: .cancel) { newModeName = "" }
@@ -79,7 +81,7 @@ struct ModeManagerView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis").font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(theme.textTertiary).frame(width: 32, height: 32)
+                        .foregroundStyle(theme.hint).frame(width: 32, height: 32)
                 }
             }
             HStack(spacing: 8) {
@@ -103,7 +105,7 @@ struct ModeManagerView: View {
         .overlay(RoundedRectangle(cornerRadius: theme.radiusCard, style: .continuous)
             .strokeBorder(isCurrent ? theme.accent : theme.hairline, lineWidth: isCurrent ? 1.5 : 1))
         .contentShape(Rectangle())
-        .onTapGesture { store.selectMode(m.id); onSelect(m.id); dismiss() }
+        .onTapGesture { guard store.selectMode(m.id) else { return }; onSelect(m.id); dismiss() }
     }
 
     private var renamingBinding: Binding<Bool> {

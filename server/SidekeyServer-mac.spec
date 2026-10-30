@@ -66,11 +66,11 @@ app = BUNDLE(
     name='Sidekey.app',
     icon=_icon,
     bundle_identifier='com.kaihongchen.sidekey.server',
-    version='1.0.0',
+    version='1.1.0',
     info_plist={
         'CFBundleName': 'Sidekey',
         'CFBundleDisplayName': 'Sidekey',
-        'CFBundleShortVersionString': '1.0.0',
+        'CFBundleShortVersionString': '1.1.0',
         'CFBundleVersion': '1',
         'LSMinimumSystemVersion': '12.0',
         'NSHighResolutionCapable': True,

@@ -30,18 +30,18 @@ struct PairingView: View {
                         .multilineTextAlignment(.center)
 
                     HStack(spacing: 10) {
-                        line; Text("或手动输入").font(.system(size: 12)).foregroundStyle(theme.textTertiary); line
+                        line; Text("或手动输入").font(.system(size: 12)).foregroundStyle(theme.hint); line
                     }
 
                     SoftField(label: String(localized: "配对码"), text: $manual, placeholder: String(localized: "粘贴电脑终端里的配对码"))
 
                     if let error {
-                        Text(error).font(.system(size: 13)).foregroundStyle(theme.danger)
+                        Text(error).font(.system(size: 13)).foregroundStyle(theme.dangerText)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
                     Text("配对码只在你的本地网络内使用, 不会上传。")
-                        .font(.system(size: 12)).foregroundStyle(theme.textTertiary)
+                        .font(.system(size: 12)).foregroundStyle(theme.hint)
                         .multilineTextAlignment(.center)
                 }
                 .padding(.horizontal, 20)
@@ -66,7 +66,7 @@ struct PairingView: View {
                     .padding(20)
             } else {
                 Image(systemName: "qrcode.viewfinder")
-                    .font(.system(size: 72, weight: .light)).foregroundStyle(theme.textTertiary)
+                    .font(.system(size: 72, weight: .light)).foregroundStyle(theme.hint)
             }
             ScanCorners().stroke(theme.accent, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                 .padding(14)

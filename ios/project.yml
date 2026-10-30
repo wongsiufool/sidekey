@@ -23,6 +23,8 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         NSLocalNetworkUsageDescription: "Sidekey connects to your computer over the local network to send keystrokes and shortcuts."
         NSCameraUsageDescription: "Sidekey uses the camera to scan the pairing QR code shown by your computer."
         NSBonjourServices:
@@ -34,8 +36,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kaihongchen.sidekey
         DEVELOPMENT_TEAM: DBYWRB2S9S
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "5"
+        MARKETING_VERSION: "1.1.0"
+        CURRENT_PROJECT_VERSION: "6"
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

@@ -60,7 +60,7 @@ struct AboutView: View {
         VStack(spacing: 8) {
             BrandMark(size: 30)
             Text(verbatim: version)
-                .font(.system(size: 13, weight: .medium)).foregroundStyle(theme.textTertiary)
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(theme.hint)
             Text("你的电脑, 触手可及")
                 .font(.system(size: 14)).foregroundStyle(theme.textSecondary)
         }
@@ -83,7 +83,7 @@ struct AboutView: View {
                             Text("查看完整隐私政策").font(.system(size: 14, weight: .medium))
                             Image(systemName: "arrow.up.right").font(.system(size: 12, weight: .semibold))
                         }
-                        .foregroundStyle(theme.accent)
+                        .foregroundStyle(theme.accentInk)
                     }
                     .buttonStyle(.plain)
                     .padding(.top, 2)
@@ -96,7 +96,7 @@ struct AboutView: View {
     private func privRow(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "checkmark").font(.system(size: 13, weight: .bold))
-                .foregroundStyle(theme.accent).padding(.top, 2)
+                .foregroundStyle(theme.accentInk).padding(.top, 2)
             Text(text).font(.system(size: 14)).foregroundStyle(theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -125,11 +125,11 @@ struct AboutView: View {
                          _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Image(systemName: icon).font(.system(size: 15)).foregroundStyle(theme.accent).frame(width: 22)
+                Image(systemName: icon).font(.system(size: 15)).foregroundStyle(theme.accentInk).frame(width: 22)
                 Text(title).font(.system(size: 16)).foregroundStyle(theme.textPrimary)
                 Spacer(minLength: 8)
                 Image(systemName: external ? "arrow.up.right" : "chevron.right")
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.textTertiary)
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.hint)
             }
             .padding(.horizontal, 16).frame(minHeight: 54).contentShape(Rectangle())
         }
@@ -148,14 +148,14 @@ struct AboutView: View {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(copied ? String(localized: "已复制") : String(localized: "点按可复制版本信息"))
-                            .font(.system(size: 12)).foregroundStyle(copied ? theme.accent : theme.textTertiary)
+                            .font(.system(size: 12)).foregroundStyle(copied ? theme.accentInk : theme.hint)
                         Text(verbatim: diagnostics)
                             .font(.system(size: 13, weight: .medium)).foregroundStyle(theme.textSecondary)
                             .lineLimit(1).minimumScaleFactor(0.7)
                     }
                     Spacer(minLength: 8)
                     Image(systemName: copied ? "checkmark.circle.fill" : "doc.on.doc")
-                        .font(.system(size: 15)).foregroundStyle(copied ? theme.accent : theme.textTertiary)
+                        .font(.system(size: 15)).foregroundStyle(copied ? theme.accentInk : theme.hint)
                 }
                 .padding(.horizontal, 16).frame(minHeight: 56).contentShape(Rectangle())
             }
@@ -170,9 +170,9 @@ struct AboutView: View {
             Text("由 wongsiufool 独立开发")
                 .font(.system(size: 13)).foregroundStyle(theme.textSecondary)
             Text(verbatim: "© 2026 wongsiufool")
-                .font(.system(size: 12)).foregroundStyle(theme.textTertiary)
+                .font(.system(size: 12)).foregroundStyle(theme.hint)
             Text("谢谢你用 Sidekey ❤️")
-                .font(.system(size: 13)).foregroundStyle(theme.textTertiary)
+                .font(.system(size: 13)).foregroundStyle(theme.hint)
                 .padding(.top, 6)
         }
         .frame(maxWidth: .infinity)

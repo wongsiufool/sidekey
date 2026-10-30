@@ -11,7 +11,8 @@ extension Color {
 }
 
 /// 三种可选视觉风格。默认 fresh = 「柔光珊瑚」(暖白 + 单珊瑚强调)。
-enum SidekeyStyle: String, CaseIterable, Codable { case fresh, minimal, lively }
+/// apple = 「苹果风」(§4.10): 浅色 = 银白, 深色 = 暗夜; 明暗沿用「浅色 / 深色 / 跟随系统」, 不会出现「银白 + 深色」之类的组合。
+enum SidekeyStyle: String, CaseIterable, Codable { case fresh, minimal, lively, apple }
 /// 明暗外观。
 enum SidekeyAppearance: String, CaseIterable, Codable { case light, dark, system }
 /// Agent 状态灯朝向 (横条 / 竖排, 可选)。
@@ -33,7 +34,7 @@ struct SidekeyTheme {
 
     var radiusPill: CGFloat { 999 }
     // 兼容旧引用
-    var accentText: Color { .white }
+    var accentText: Color { .white }          // 主色填充上的文字 (onAccent)
     var bgTop: Color { canvasTop }
     var bgBottom: Color { canvasBottom }
     var keyStroke: Color { hairline }
@@ -49,31 +50,72 @@ struct SidekeyTheme {
         LinearGradient(colors: [canvasTop, canvasBottom], startPoint: .top, endPoint: .bottom)
     }
 
+    // MARK: 苹果风追加的 token (其他风格取与原来界面一致的值, 不改变现有外观)
+    /// 浅底 (accentLight / 卡片) 上的主色文字与图标: 苹果风的填充色上深一档才够 4.5:1。
+    var accentInk: Color {
+        guard style == .apple else { return accent }
+        return isDark ? Color(hex: 0x6CB4FF) : Color(hex: 0x0062CC)
+    }
+    /// 操作说明 / 菜单副标题: 用可读的文字色, 不用「禁用」那一档的浅灰 (§4.10)。
+    var hint: Color {
+        guard style == .apple else { return textTertiary }
+        // 银白: 画布底部渐变到 #D8D9DD, 画布上的说明文字要比 UI 稿的 #636366 再深一点才够 4.5:1
+        return isDark ? Color(hex: 0xA3A9B2) : Color(hex: 0x5C5C60)
+    }
+    /// 连接状态等语义文字色 (角标符号、状态文字): 按实际底色逐个满足对比度。
+    var successInk: Color {
+        if style == .apple { return isDark ? Color(hex: 0x30D158) : Color(hex: 0x1E7B34) }
+        return isDark ? Color(hex: 0x4FD58E) : Color(hex: 0x3F9A62)
+    }
+    var cautionInk: Color {
+        if style == .apple { return isDark ? Color(hex: 0xFFB86B) : Color(hex: 0x8F4400) }
+        return isDark ? Color(hex: 0xF2A03D) : Color(hex: 0xB4532A)
+    }
+    /// 作为「文字」用的警告 / 危险色 (其他风格 = 原来的 warning / danger, 外观不变; 苹果风换成能过 4.5:1 的深 / 浅一档)。
+    var warningText: Color { style == .apple ? cautionInk : warning }
+    var dangerText: Color { style == .apple ? dangerInk : danger }
+    /// 警告色填充 (如「重新检测」按钮) 上的文字: 苹果风用深色 (橙底白字只有 2:1), 其他风格保持白色。
+    var onWarning: Color { style == .apple ? Color(hex: 0x1D1D1F) : .white }
+    var dangerInk: Color {
+        if style == .apple { return isDark ? Color(hex: 0xFF6961) : Color(hex: 0xAD0010) }
+        return isDark ? Color(hex: 0xFF7378) : Color(hex: 0xD2433C)
+    }
+
     // MARK: 柔光阴影 (shadowRaised / shadowPressed); 暗色/极简返回 .clear, 改用描边
-    /// 外阴影 (柔软隆起)。
+    /// 外阴影 (柔软隆起)。苹果风银白 = 1 pt 下沿硬阴影 (像实体键); 暗夜不靠阴影靠描边。
     var raisedOuter: (color: Color, radius: CGFloat, y: CGFloat) {
         guard raised, !isDark else { return (.clear, 0, 0) }
+        if style == .apple { return (Color.black.opacity(0.20), 0, 1) }
         return (Color(hex: 0xA08B7A).opacity(0.12), 14, 8)
     }
-    /// 上沿白光 (微微高光)。
+    /// 上沿白光 (微微高光)。苹果风银白改为淡投影。
     var raisedTop: (color: Color, radius: CGFloat, y: CGFloat) {
         guard raised, !isDark else { return (.clear, 0, 0) }
+        if style == .apple { return (Color.black.opacity(0.16), 4, 3) }
         return (Color.white.opacity(0.85), 2, -1)
     }
     /// 按下 / 内嵌阴影。
     var pressedShadow: (color: Color, radius: CGFloat, y: CGFloat) {
-        isDark ? (Color.black.opacity(0.40), 5, 3) : (Color(hex: 0xCDB8A8).opacity(0.13), 5, 3)
+        if style == .apple { return (Color.black.opacity(isDark ? 0.50 : 0.18), 5, 3) }
+        return isDark ? (Color.black.opacity(0.40), 5, 3) : (Color(hex: 0xCDB8A8).opacity(0.13), 5, 3)
     }
 
     /// 语义色 (确认绿 / 回退红) → (填充, 文字)。各风格保留可辨识度。
-    private var successStyle: (AnyShapeStyle, Color) {
-        isDark ? (AnyShapeStyle(Color(hex: 0x17331E)), Color(hex: 0x4FD58E))
-               : (AnyShapeStyle(Color(hex: 0xDDF1E3)), Color(hex: 0x2E9D5E))
+    /// 确认绿 / 回退红 的 (填充, 文字) 色对。公开成 Color, 供对比度测试用实际的填充色计算。
+    var successPair: (fill: Color, text: Color) {
+        if style == .apple {
+            return isDark ? (Color(hex: 0x17331F), Color(hex: 0x30D158)) : (Color(hex: 0xE3F6E8), Color(hex: 0x1E7B34))
+        }
+        return isDark ? (Color(hex: 0x17331E), Color(hex: 0x4FD58E)) : (Color(hex: 0xDDF1E3), Color(hex: 0x2E9D5E))
     }
-    private var dangerStyle: (AnyShapeStyle, Color) {
-        isDark ? (AnyShapeStyle(Color(hex: 0x371A1C)), Color(hex: 0xFF7378))
-               : (AnyShapeStyle(Color(hex: 0xFBE1DF)), Color(hex: 0xD2433C))
+    var dangerPair: (fill: Color, text: Color) {
+        if style == .apple {
+            return isDark ? (Color(hex: 0x3A1B1D), Color(hex: 0xFF6961)) : (Color(hex: 0xFFE5E3), Color(hex: 0xD70015))
+        }
+        return isDark ? (Color(hex: 0x371A1C), Color(hex: 0xFF7378)) : (Color(hex: 0xFBE1DF), Color(hex: 0xD2433C))
     }
+    private var successStyle: (AnyShapeStyle, Color) { (AnyShapeStyle(successPair.fill), successPair.text) }
+    private var dangerStyle: (AnyShapeStyle, Color) { (AnyShapeStyle(dangerPair.fill), dangerPair.text) }
 
     /// 功能分组色 → (填充, 文字)。
     /// 柔光珊瑚/极简 = 单强调, 装饰色(薄荷/天蓝/薰衣草/琥珀)收敛为中性白键, 仅珊瑚/语义色保留; 活泼 = 完整多彩。
@@ -82,7 +124,7 @@ struct SidekeyTheme {
         if style == .minimal { return (AnyShapeStyle(keyFill), keyText) }
         switch t {
         case .accent:   return (AnyShapeStyle(accent), accentText)      // (上面已提前返回, 这里保证 switch 穷尽)
-        case .coral:    return (AnyShapeStyle(accentLight), accent)     // 柔珊瑚浅填 + 珊瑚字/符
+        case .coral:    return (AnyShapeStyle(accentLight), accentInk)  // 柔珊瑚浅填 + 珊瑚字/符 (苹果风: 浅蓝填 + 蓝字)
         case .neutral:  return (AnyShapeStyle(keyModFill), keyModText)
         case .success:  return successStyle
         case .danger:   return dangerStyle
@@ -124,6 +166,24 @@ struct SidekeyTheme {
                          success: Color(hex: 0x4FD58E), warning: Color(hex: 0xF2A03D), danger: Color(hex: 0xFF6F66),
                          keyFill: Color(hex: 0x2A241F), keyText: Color(hex: 0xECE5DD), keyModFill: Color(hex: 0x1E1A16), keyModText: Color(hex: 0x8A8076),
                          hairline: Color(hex: 0x3A322B), radiusKey: 18, radiusCard: 20, radiusPanel: 24, raised: false, isDark: true)
+        // 苹果风 · 银白 (银色 MacBook + 白色 Magic Keyboard, UI 稿画板 15)
+        case (.apple, false):
+            return .init(canvasTop: Color(hex: 0xE4E5E8), canvasBottom: Color(hex: 0xD8D9DD),
+                         surface: Color(hex: 0xFFFFFF), surfaceMuted: Color(hex: 0xEEEEF1),
+                         accent: Color(hex: 0x0071E3), accentLight: Color(hex: 0xD3E5FF),
+                         textPrimary: Color(hex: 0x1D1D1F), textSecondary: Color(hex: 0x5C5C60), textTertiary: Color(hex: 0xA1A1A6),   // 次要文字比 UI 稿的 #636366 深一档: 画布渐变底部 #D8D9DD 上才有 4.5:1
+                         success: Color(hex: 0x34C759), warning: Color(hex: 0xFF9F0A), danger: Color(hex: 0xFF3B30),
+                         keyFill: Color(hex: 0xFFFFFF), keyText: Color(hex: 0x1D1D1F), keyModFill: Color(hex: 0xEEEEF1), keyModText: Color(hex: 0x636366),
+                         hairline: Color(hex: 0xCFCFD4), radiusKey: 18, radiusCard: 20, radiusPanel: 24, raised: true, isDark: false)
+        // 苹果风 · 暗夜 (MacBook Air 午夜色, 画板 16)
+        case (.apple, true):
+            return .init(canvasTop: Color(hex: 0x20242B), canvasBottom: Color(hex: 0x181B21),
+                         surface: Color(hex: 0x2C313A), surfaceMuted: Color(hex: 0x252930),
+                         accent: Color(hex: 0x0A6BDB), accentLight: Color(hex: 0x1A3A60),
+                         textPrimary: Color(hex: 0xF2F3F5), textSecondary: Color(hex: 0xA3A9B2), textTertiary: Color(hex: 0x6C727B),
+                         success: Color(hex: 0x30D158), warning: Color(hex: 0xFF9F0A), danger: Color(hex: 0xFF453A),
+                         keyFill: Color(hex: 0x2C313A), keyText: Color(hex: 0xF2F3F5), keyModFill: Color(hex: 0x252930), keyModText: Color(hex: 0xA3A9B2),
+                         hairline: Color(hex: 0x383E48), radiusKey: 18, radiusCard: 20, radiusPanel: 24, raised: false, isDark: true)
         // 云雾灰 (极简浅)
         case (.minimal, false):
             return .init(canvasTop: Color(hex: 0xF6F5F3), canvasBottom: Color(hex: 0xEFEEEC),

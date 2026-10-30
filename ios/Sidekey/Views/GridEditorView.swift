@@ -10,6 +10,8 @@ struct GridEditorView: View {
     var onMove: (UUID, Int, Int) -> Void = { _, _, _ in }
     var onResize: (UUID, Int, Int) -> Void = { _, _, _ in }
     var onEdit: (KeyCap) -> Void = { _ in }
+    /// 子页切线 (大屏编辑器按标准半折 N = 4 预览, §4.8): 在这些行的上边界画虚线。空 = 不画。
+    var cutRows: [Int] = []
     @Environment(\.sidekeyTheme) private var theme
 
     private let gap: CGFloat = 8
@@ -42,6 +44,18 @@ struct GridEditorView: View {
                         .frame(width: geo.size.width, height: totalH)
                     guides(cols: cols, rows: rows, cellW: cellW, stepX: stepX, stepY: stepY)
                         .frame(width: geo.size.width, height: totalH)
+                    if !cutRows.isEmpty {
+                        Canvas { ctx, size in
+                            for r in cutRows {
+                                let y = topPad + CGFloat(r) * stepY - gap / 2
+                                var path = Path(); path.move(to: CGPoint(x: 0, y: y)); path.addLine(to: CGPoint(x: size.width, y: y))
+                                ctx.stroke(path, with: .color(theme.hint), style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
+                            }
+                        }
+                        .frame(width: geo.size.width, height: totalH)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier("subpageCutLines")
+                    }
                     Color.clear
                         .frame(width: geo.size.width, height: totalH)
                         .contentShape(Rectangle())
@@ -52,7 +66,7 @@ struct GridEditorView: View {
                     }
                     if layer.keys.isEmpty {
                         Text("本页暂无按键 —— 点下方「新增按键」开始")
-                            .font(.system(size: 13)).foregroundStyle(theme.textTertiary)
+                            .font(.system(size: 13)).foregroundStyle(theme.hint)
                             .frame(width: geo.size.width, height: cellH * 1.5)
                             .offset(y: topPad)
                     }
@@ -122,7 +136,7 @@ struct GridEditorView: View {
                 if isSel && !isDragging {
                     Button { onEdit(cap) } label: {
                         Image(systemName: "ellipsis").font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(.white).frame(width: 28, height: 28)
+                            .foregroundStyle(theme.accentText).frame(width: 28, height: 28)
                             .background(Circle().fill(theme.accent))
                     }
                     .buttonStyle(.plain)

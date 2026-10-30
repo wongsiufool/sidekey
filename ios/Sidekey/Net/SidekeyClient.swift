@@ -27,6 +27,15 @@ struct AgentStatus: Equatable {
     var project: String?
 }
 
+/// 电脑端一个「正在跑的 agent 会话」(如 Claude Code 的一个项目)。给「状态看板」6 灯用。
+struct AgentSession: Equatable, Identifiable {
+    var id: String
+    var project: String
+    var agent: String        // "claude" / "codex"
+    var state: AgentState
+    var source: String = ""  // "claude-desktop" / "sdk-cli" / "codex" —— 决定点击跳哪
+}
+
 /// 线程安全地存「本次连接期望的证书指纹」: 主线程(connect)写、URLSession 委托读。
 final class CertPin: @unchecked Sendable {
     private let lock = NSLock()
@@ -127,18 +136,24 @@ final class SidekeyClient: NSObject, ObservableObject {
     // 当前(手填连接)令牌优先取 Keychain, 取不到再回退旧的明文 UserDefaults(随后 doConnect 会迁进 Keychain)。
     @Published var token: String = KeychainToken.get("current")
         ?? UserDefaults.standard.string(forKey: "sidekey.token") ?? ""
+    /// 是否允许把当前连接信息 (host / port / 令牌的 Keychain "current" 缓存) 落盘 (由 App 级装配: 存档有未保存的修改时返回 false)。
+    var credentialCacheWriteAllowed: () -> Bool = { true }
     @Published var capturing = false
     @Published var captured: CapturedKey?
     /// 电脑端推来的各 agent 状态 (键: "claude" / "codex")。用于状态灯。
     @Published var agentStatuses: [String: AgentStatus] = [:]
     /// 电脑端推来的「当前活跃 agent」(最近在用的那个); 状态灯自动跟随它。
     @Published var activeAgent: String?
+    /// 电脑端推来的「正在跑的 agent 会话」列表 (Claude Code 各项目), 按最近活动排序。给状态看板 6 灯用。
+    @Published var agentSessions: [AgentSession] = []
     /// 当前连接 / 正在连接的目标电脑 id (键实际发往哪台)。切换/删除电脑时用来对齐, 避免漂移。
     @Published private(set) var connectedComputerID: UUID?
     /// 当前连接所用的完整配置 (host/port/token/指纹)。用于判断「编辑同一台电脑改了地址/令牌」时要不要重连 (审计 H-1)。
     private(set) var connectedConfig: ConnectionConfig?
     /// 服务端是否已获「辅助功能」授权 (macOS)。false = 已连接但按键会被系统拦掉。鉴权后由 ready 消息更新。
     @Published private(set) var serverAXAuthorized = true
+    /// 电脑端在 ready 里报告的系统 (platform.system(): Darwin / Windows / …); 每次新连接先清空。
+    @Published private(set) var serverPlatform: String?
     /// TOFU: 手填连接(无指纹)首次握手时看到的服务端证书指纹 + 它属于哪台电脑; UI 据此固定到该电脑, 之后转严格 pin。
     /// 每次 doConnect 会先清成 nil(一次性事件), 否则同一指纹再学一次时 onChange 不触发, 持久化/核对被静默跳过 (审计复审 #1)。
     @Published var learnedFingerprint: LearnedFingerprint?
@@ -205,6 +220,7 @@ final class SidekeyClient: NSObject, ObservableObject {
         if !force, connectedComputerID == computer.id, connectedConfig == target, live {
             return   // 目标与配置都没变、连接还在 → 不重连, 避免无谓打断
         }
+        cancelDelayedInput()            // 换了电脑 / 配置: 旧电脑上还没发出的延迟命令作废
         connectedComputerID = computer.id
         connectedConfig = target
         host = computer.host
@@ -235,6 +251,7 @@ final class SidekeyClient: NSObject, ObservableObject {
     }
 
     func disconnect() {
+        cancelDelayedInput()
         shouldReconnect = false
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -263,15 +280,19 @@ final class SidekeyClient: NSObject, ObservableObject {
             status = .failed(.address); connectedComputerID = nil
             shouldReconnect = false; return
         }
-        UserDefaults.standard.set(h, forKey: "sidekey.host")
-        UserDefaults.standard.set(port, forKey: "sidekey.port")
+        if credentialCacheWriteAllowed() {      // 有未保存的修改 (v1.8): 连接信息只在内存里, 不落盘
+            UserDefaults.standard.set(h, forKey: "sidekey.host")
+            UserDefaults.standard.set(port, forKey: "sidekey.port")
+        }
         // 令牌存 Keychain(敏感), 并清掉旧的明文 UserDefaults。
-        KeychainToken.set(token, for: "current")
+        // 有未保存的修改 (v1.8) 时 Keychain 一点不改: 草稿里的配置只用于内存里的这次连接, 缓存等保存成功后的下一次连接再写。
+        if credentialCacheWriteAllowed() { KeychainToken.set(token, for: "current") }
         UserDefaults.standard.removeObject(forKey: "sidekey.token")
         teardown()
         connectingTarget.set(connectedComputerID)   // 记下这次握手的目标电脑, 供 TLS 委托绑定 TOFU 指纹归属
         learnedFingerprint = nil                     // 清掉上次的一次性事件, 让相同指纹再学一次也能触发 onChange (审计复审 #1)
         serverAXAuthorized = true        // 新连接先假定 OK, 等服务端 ready 消息再更新
+        serverPlatform = nil
         status = .connecting
         let t = session.webSocketTask(with: url)
         t.maximumMessageSize = maxIncomingMessageSize   // 收包上限, 防超大消息打爆内存
@@ -313,7 +334,7 @@ final class SidekeyClient: NSObject, ObservableObject {
         task = nil
         moveInFlight = false; pendingDX = 0; pendingDY = 0   // 清掉触控板背压残量, 重连不跳
         scrollInFlight = false; pendingScrollDX = 0; pendingScrollDY = 0
-        failPendingResults("disconnected")                   // 连接没了, 挂起的粘贴回执立即判失败(听写文本保留)
+        failPendingResults("lost")                           // 连接没了: 已经交出去的请求可能已经执行, 只是回执丢了 → 结果不确定 (M3 审计 B6)
     }
 
     /// 统一的失败入口 (审计 H-3): 设分类后的失败态, 并决定要不要继续自动重连。
@@ -440,8 +461,15 @@ final class SidekeyClient: NSObject, ObservableObject {
     /// (Claude Code 没有「⌘⇧M + 数字」选模式的机制, 真实机制就是 Shift+Tab 循环。)
     func sendShiftTab(times: Int) {
         guard times > 0 else { return }
+        // 延迟发出的几次要锁定发起时的电脑 + 连接代次: 中途切了电脑 / 断开 / 被 §5.2 中断, 剩下的就作废, 不会发到新电脑上。
+        let epoch = delayedInputEpoch
+        let generation = connectionGeneration      // 真正的连接代次: 断网 / 自动重连 / 换连接都会变, 旧连接上的延迟命令作废
+        let target = connectedComputerID
         for i in 0..<times {
-            let fire: () -> Void = { [weak self] in self?.sendKey(KeyCap(label: "", code: "tab", mods: ["shift"])) }
+            let fire: () -> Void = { [weak self] in
+                guard let self, self.delayedInputEpoch == epoch, self.connectionGeneration == generation, self.connectedComputerID == target else { return }
+                self.sendKey(KeyCap(label: "", code: "tab", mods: ["shift"]))
+            }
             if i == 0 { fire() }
             else { DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.15, execute: fire) }
         }
@@ -480,10 +508,71 @@ final class SidekeyClient: NSObject, ObservableObject {
 
     /// 断开/失败时让所有挂起的回执立刻收尾, 不必等各自超时。
     private func failPendingResults(_ code: String) {
+        if let cb = pendingBind { pendingBind = nil; cb(nil) }   // 挂起的「绑定窗口」也收尾
+        if let cb = pendingList { pendingList = nil; cb([]) }    // 挂起的「窗口列表」也收尾
         guard !pendingResults.isEmpty else { return }
         let cbs = Array(pendingResults.values)
         pendingResults.removeAll()
         for cb in cbs { cb(false, code) }
+    }
+
+    // MARK: - 窗口聚焦 (Phase 1: 6 键跳窗)
+    /// 电脑上一个窗口的身份 (给「窗口快捷键」绑定用)。
+    struct WindowRef: Equatable { var app: String; var title: String; var winId: Int? }
+    private var pendingBind: ((WindowRef?) -> Void)?
+
+    /// 请求电脑读取「当前最前窗口」并回调其身份 (编辑器「绑定当前窗口」用)。
+    /// completion 保证在主线程被调用且仅一次: 成功给 WindowRef, 失败/超时/未连接给 nil。
+    func bindCurrentWindow(timeout: TimeInterval = 6, completion: @escaping (WindowRef?) -> Void) {
+        guard case .connected = status else { completion(nil); return }
+        pendingBind?(nil)                       // 若有上一次未收尾的, 先作废
+        pendingBind = completion
+        sendJSON(["v": 1, "type": "bind_current_window"])
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            guard let self, let cb = self.pendingBind else { return }
+            self.pendingBind = nil; cb(nil)     // 超时没回 → nil
+        }
+    }
+
+    /// 点键跳窗: 让电脑把绑定的窗口切到最前 (按 windowId 快命中, 否则按 app+title 查找)。
+    func focusWindow(app: String, title: String, winId: Int?) {
+        var obj: [String: Any] = ["v": 1, "type": "focus_window", "app": app, "title": title]
+        if let winId { obj["windowId"] = winId }
+        sendJSON(obj)
+    }
+
+    /// 状态灯点击(旧·终端版): 按项目名聚焦运行该 Claude Code 会话的终端窗口 (电脑端按标题匹配)。
+    func focusSession(project: String) {
+        guard !project.isEmpty else { return }
+        sendJSON(["v": 1, "type": "focus_session", "project": project])
+    }
+
+    /// 状态灯点击(Claude 桌面版): 用 claude://resume 深链在 Claude 桌面版里打开该会话。
+    func resumeSession(id: String) {
+        guard !id.isEmpty else { return }
+        sendJSON(["v": 1, "type": "resume_session", "session": id])
+    }
+
+    /// 状态灯点击总入口: 电脑端按 source 分流 (claude-desktop→claude://resume · codex→codex://threads · sdk-cli→终端窗口)。
+    func activateSession(id: String, source: String, project: String) {
+        guard !id.isEmpty else { return }
+        sendJSON(["v": 1, "type": "activate_session", "session": id, "source": source, "project": project])
+    }
+
+    private var pendingList: (([WindowRef]) -> Void)?
+
+    /// 请求电脑列出所有可聚焦窗口 (编辑器「从列表选择窗口」用)。completion 保证主线程调用且仅一次。
+    func listWindows(timeout: TimeInterval = 6, completion: @escaping ([WindowRef]) -> Void) {
+        guard case .connected = status else { completion([]); return }
+        pendingList?([])                        // 作废上一次未收尾的
+        pendingList = completion
+        sendJSON(["v": 1, "type": "list_windows"])
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            guard let self, let cb = self.pendingList else { return }
+            self.pendingList = nil; cb([])       // 超时 → 空列表
+        }
     }
 
     // MARK: - 触控板 / 鼠标
@@ -507,6 +596,7 @@ final class SidekeyClient: NSObject, ObservableObject {
         guard let data = try? JSONSerialization.data(withJSONObject:
                 ["v": 1, "type": "mouse", "action": "move", "dx": dx, "dy": dy]),
               let str = String(data: data, encoding: .utf8) else { return }
+        SendLog.record(str)
         moveInFlight = true
         task.send(.string(str)) { [weak self] error in
             Task { @MainActor in
@@ -517,6 +607,16 @@ final class SidekeyClient: NSObject, ObservableObject {
             }
         }
     }
+    /// 延迟发送的命令 (如 sendShiftTab 的后几次) 用的代次: 换电脑 / 断开 / 输入中断时加一, 旧的延迟闭包就失效。
+    private var delayedInputEpoch = 0
+    func cancelDelayedInput() { delayedInputEpoch &+= 1 }
+
+    /// 丢掉还没交给 WebSocket 的待发位移和滚动 (§5.2 第 3 步); 已经发出、等回执的不撤回。
+    func discardPendingMotion() {
+        pendingDX = 0; pendingDY = 0
+        pendingScrollDX = 0; pendingScrollDY = 0
+    }
+
     /// 单击 (button: "left" / "right")。
     func sendMouseClick(button: String) {
         sendJSON(["v": 1, "type": "mouse", "action": "click", "button": button])
@@ -540,6 +640,7 @@ final class SidekeyClient: NSObject, ObservableObject {
         guard let data = try? JSONSerialization.data(withJSONObject:
                 ["v": 1, "type": "mouse", "action": "scroll", "dx": dx, "dy": dy]),
               let str = String(data: data, encoding: .utf8) else { return }
+        SendLog.record(str)
         scrollInFlight = true
         task.send(.string(str)) { [weak self] error in
             Task { @MainActor in
@@ -569,6 +670,7 @@ final class SidekeyClient: NSObject, ObservableObject {
     private func sendJSON(_ obj: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: obj),
               let str = String(data: data, encoding: .utf8) else { return }
+        SendLog.record(str)
         task?.send(.string(str)) { [weak self] error in
             guard error != nil else { return }
             // 发送失败 = 连接多半已断。回流到可见状态(不再只 print 到控制台, 审计 H-3),
@@ -625,7 +727,9 @@ final class SidekeyClient: NSObject, ObservableObject {
             }
         case "ready":
             let ax = (obj["ax"] as? Bool) ?? true
+            let platform = obj["platform"] as? String          // 电脑端已有字段 (Darwin / Windows): 笔记本键盘按它选排法 (§4.9)
             Task { @MainActor in
+                self.serverPlatform = platform
                 self.stopHandshakeTimeout()   // 握手完成, 撤掉看门狗
                 self.serverAXAuthorized = ax  // 鉴权后服务端报告能力: 辅助功能没授权时按键无效
                 self.status = .connected      // 鉴权完成, 此刻才算真连上
@@ -652,6 +756,30 @@ final class SidekeyClient: NSObject, ObservableObject {
                 self.captured = CapturedKey(code: code, mods: mods)
                 self.capturing = false
             }
+        case "window_bound":
+            // 「绑定当前窗口」回执: 电脑最前窗口的身份
+            let ok = (obj["ok"] as? Bool) ?? false
+            let app = obj["app"] as? String ?? ""
+            let title = obj["title"] as? String ?? ""
+            let winId = obj["windowId"] as? Int
+            Task { @MainActor in
+                guard let cb = self.pendingBind else { return }
+                self.pendingBind = nil
+                cb(ok ? WindowRef(app: app, title: title, winId: winId) : nil)
+            }
+        case "window_list":
+            // 「窗口选择器」回执: 所有可聚焦窗口
+            let arr = (obj["windows"] as? [[String: Any]]) ?? []
+            let refs = arr.map {
+                WindowRef(app: $0["app"] as? String ?? "",
+                          title: $0["title"] as? String ?? "",
+                          winId: $0["windowId"] as? Int)
+            }
+            Task { @MainActor in
+                guard let cb = self.pendingList else { return }
+                self.pendingList = nil
+                cb(refs)
+            }
         case "capture_failed":
             Task { @MainActor in self.capturing = false }
         case "agent_status":
@@ -664,8 +792,18 @@ final class SidekeyClient: NSObject, ObservableObject {
             }
             let active = obj["active"] as? String
             let ax = obj["ax"] as? Bool      // 周期推送顺带带 AX 授权; 运行中被撤销也能及时提示
+            // 状态看板: 正在跑的会话列表
+            let sessRaw = (obj["sessions"] as? [[String: Any]]) ?? []
+            let sessions = sessRaw.map { d in
+                AgentSession(id: d["id"] as? String ?? "\(d["agent"] as? String ?? ""):\(d["project"] as? String ?? "")",
+                             project: d["project"] as? String ?? "",
+                             agent: d["agent"] as? String ?? "",
+                             state: AgentState(rawValue: d["state"] as? String ?? "") ?? .offline,
+                             source: d["source"] as? String ?? "")
+            }
             Task { @MainActor in
                 self.agentStatuses = parsed; self.activeAgent = active
+                self.agentSessions = sessions
                 if let ax { self.serverAXAuthorized = ax }
             }
         default:
@@ -760,4 +898,13 @@ extension SidekeyClient: URLSessionWebSocketDelegate {
             if self.shouldReconnect { self.scheduleReconnect() }
         }
     }
+}
+
+// MARK: - 输入传输层 (InputGuard 用)
+extension SidekeyClient: InputTransport {
+    var transportComputerID: UUID? { connectedComputerID }
+    func transportMouseDown(button: String) { sendMouseDown(button: button) }
+    func transportMouseUp(button: String) { sendMouseUp(button: button) }
+    func transportMouseClick(button: String) { sendMouseClick(button: button) }
+    func transportDiscardPendingMotion() { discardPendingMotion(); cancelDelayedInput() }
 }

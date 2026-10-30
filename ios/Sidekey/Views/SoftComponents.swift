@@ -124,8 +124,8 @@ struct CoralButton: View {
                 if let icon { Image(systemName: icon) }
                 Text(title)
             }
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white)
+            .font(.system(size: 17, weight: theme.style == .apple ? .bold : .semibold))     // 苹果风: 填充上的文字加粗 (§4.10)
+            .foregroundStyle(theme.accentText)
             .frame(maxWidth: .infinity)
             .frame(height: height)
             .background(Capsule().fill(theme.accent))
@@ -153,7 +153,7 @@ struct OutlineButton: View {
                 Text(title)
             }
             .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(theme.accent)
+            .foregroundStyle(theme.accentInk)
             .frame(maxWidth: .infinity)
             .frame(height: height)
             .background(Capsule().fill(theme.surface))
@@ -175,7 +175,7 @@ struct CircleIconButton: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: filled ? 18 : 17, weight: .semibold))
-                .foregroundStyle(filled ? .white : theme.textSecondary)
+                .foregroundStyle(filled ? theme.accentText : theme.textSecondary)
                 .frame(width: diameter, height: diameter)
                 .background(
                     Circle().fill(filled ? theme.accent : theme.surface)
@@ -240,7 +240,7 @@ struct StatusPill: View {
             if let dotColor { Circle().fill(dotColor).frame(width: 7, height: 7) }
             Text(text)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(emphasized ? theme.accent : theme.textSecondary)
+                .foregroundStyle(emphasized ? theme.accentInk : theme.textSecondary)
         }
         .padding(.horizontal, 10).padding(.vertical, 5)
         .background(Capsule().fill(emphasized ? theme.accentLight : theme.surfaceMuted))
@@ -254,7 +254,7 @@ struct LastRequestedTag: View {
     var body: some View {
         Text("上次请求")
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(theme.accent)
+            .foregroundStyle(theme.accentInk)
             .padding(.horizontal, 9).padding(.vertical, 4)
             .background(Capsule().fill(theme.accentLight.opacity(0.7)))
             .overlay(Capsule().strokeBorder(theme.accent.opacity(0.35), lineWidth: 1))
@@ -275,7 +275,7 @@ struct SoftSegmentedControl<T: Hashable>: View {
                 let sel = item.tag == selection
                 Text(item.title)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(sel ? theme.accent : theme.textSecondary)
+                    .foregroundStyle(sel ? theme.accentInk : theme.textSecondary)
                     .frame(maxWidth: .infinity)
                     .frame(height: 36)
                     .background(
@@ -361,7 +361,7 @@ struct PanelRow<Trailing: View>: View {
             trailing
             if chevron {
                 Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme.textTertiary)
+                    .foregroundStyle(theme.hint)
             }
         }
         .frame(minHeight: height)

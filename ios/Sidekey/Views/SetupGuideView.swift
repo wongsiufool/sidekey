@@ -49,15 +49,15 @@ struct SetupGuideView: View {
 
                     // 链接文本兜底: 按钮点不开(或换设备)时也能手抄地址。
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("电脑端下载地址:").font(.system(size: 12)).foregroundStyle(theme.textTertiary)
+                        Text("电脑端下载地址:").font(.system(size: 12)).foregroundStyle(theme.hint)
                         Text(verbatim: helperPageURL.absoluteString)
-                            .font(.system(size: 12, weight: .medium)).foregroundStyle(theme.accent)
+                            .font(.system(size: 12, weight: .medium)).foregroundStyle(theme.accentInk)
                             .textSelection(.enabled)
                     }
                     .padding(.top, 2)
 
                     Text("提示: 之后也能在「电脑列表」里再打开这个说明。")
-                        .font(.system(size: 12)).foregroundStyle(theme.textTertiary)
+                        .font(.system(size: 12)).foregroundStyle(theme.hint)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.top, 8)
                 }
@@ -71,7 +71,7 @@ struct SetupGuideView: View {
     private func stepRow(_ n: Int, _ title: String, _ detail: String) -> some View {
         HStack(alignment: .top, spacing: 14) {
             Text("\(n)")
-                .font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
+                .font(.system(size: 16, weight: .bold)).foregroundStyle(theme.accentText)
                 .frame(width: 32, height: 32)
                 .background(Circle().fill(theme.accent))
             VStack(alignment: .leading, spacing: 3) {

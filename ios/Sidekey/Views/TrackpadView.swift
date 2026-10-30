@@ -14,6 +14,10 @@ enum TrackpadTuning {
     static let scrollMaxSpeed: Double = 9.0
     static let scrollAccelK: CGFloat = 0.05  // 滚动加速度: 快速滑动滚更远, 慢速更精准
     static let edgeScrollFraction: CGFloat = 0.16   // 右侧这段宽度 = 单指上下滑滚动条区
+    static let edgeScrollMaxWidth: CGFloat = 64     // 滚动带最宽 64 pt (§5.4)
+
+    /// 滚动带宽度: 触控板宽 × 16%, 最宽 64 (视觉和手势共用, M3 审计 S1)。
+    static func scrollBandWidth(_ width: CGFloat) -> CGFloat { min(width * edgeScrollFraction, edgeScrollMaxWidth) }
 }
 
 /// 触控板手势面: 用 UIKit 手势识别器可靠区分单指/双指 (纯 SwiftUI 难分)。
@@ -25,6 +29,7 @@ struct TrackpadSurface: UIViewRepresentable {
     var onScroll: (Int, Int) -> Void
     var onLeftClick: () -> Void
     var onRightClick: () -> Void
+    var resetToken: Int = 0
 
     func makeUIView(context: Context) -> UIView {
         let v = UIView()
@@ -52,33 +57,70 @@ struct TrackpadSurface: UIViewRepresentable {
         return v
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) { context.coordinator.parent = self }
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.applyResetIfNeeded(uiView, token: resetToken)
+    }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator: NSObject {
         var parent: TrackpadSurface
+        private var lastResetToken = 0
+
+        /// §5.2: 取消正在进行的手势 (关再开识别器会把进行中的触摸判为取消) 并清掉累积位移 / 滚动余量, 不把它们发出去。
+        func applyResetIfNeeded(_ view: UIView, token: Int) {
+            guard token != lastResetToken else { return }
+            lastResetToken = token
+            moveAccX = 0; moveAccY = 0; scrollRemX = 0; scrollRemY = 0; pan1IsScroll = false
+            for g in view.gestureRecognizers ?? [] { g.isEnabled = false; g.isEnabled = true }
+        }
         private var moveAccX: CGFloat = 0, moveAccY: CGFloat = 0
         private var scrollRemX: CGFloat = 0, scrollRemY: CGFloat = 0   // 滚动亚像素余量
         private var pan1IsScroll = false      // 这次单指拖是否落在右侧滚动条区
+        /// 这次手势已因手指越界被取消 (§5.3): 直到手势结束都不再发任何位移 / 滚动。
+        private var aborted = false
         private var lastMoveSent: TimeInterval = 0
         // 采样上限 ~120Hz, 取更细粒度; 真正的「防灌爆」改由客户端 sendMouseMove 的合并+背压把关。
         private let moveInterval: TimeInterval = 1.0 / 120.0
 
         init(_ p: TrackpadSurface) { parent = p }
 
+        /// 有没有参与触摸的手指 (或质心) 在触控板外。
+        private func anyOutside(_ g: UIPanGestureRecognizer) -> Bool {
+            guard let view = g.view else { return false }
+            let b = view.bounds
+            var points = [g.location(in: view)]
+            for i in 0..<g.numberOfTouches { points.append(g.location(ofTouch: i, in: view)) }
+            return points.contains { !b.contains($0) }
+        }
+
+        /// §5.3: 任一参与触摸的手指滑出触控板区 → 取消整次手势、丢掉余量, 不按正常结束补发末段 (M3 审计 B3)。
+        /// 返回 true = 已越界 (调用方直接返回)。
+        private func abortIfOutside(_ g: UIPanGestureRecognizer) -> Bool {
+            if aborted { return true }
+            guard anyOutside(g) else { return false }
+            aborted = true
+            moveAccX = 0; moveAccY = 0; scrollRemX = 0; scrollRemY = 0
+            g.isEnabled = false; g.isEnabled = true            // 让识别器进入 cancelled
+            return true
+        }
+
         @objc func handlePan1(_ g: UIPanGestureRecognizer) {
             let view = g.view
             if g.state == .began {
-                // 单指起点落在右侧 edgeScrollFraction 宽度内 → 这次当滚动条用 (只纵向滚动)。
+                aborted = false
+                // 单指起点落在右侧滚动带内 → 这次当滚动条用 (只纵向滚动)。
                 let x = g.location(in: view).x, w = view?.bounds.width ?? 1
-                pan1IsScroll = x >= w * (1 - TrackpadTuning.edgeScrollFraction)
+                pan1IsScroll = x >= w - TrackpadTuning.scrollBandWidth(w)
                 moveAccX = 0; moveAccY = 0; scrollRemX = 0; scrollRemY = 0
             }
             if g.state == .ended || g.state == .cancelled {
-                if !pan1IsScroll { flushMove(force: true) }
-                moveAccX = 0; moveAccY = 0; pan1IsScroll = false
+                // 只有正常结束、没越界过、并且结束位置仍在触控板内才冲掉余量; 取消不补发 (M3 审计 N-B2: 到 ended 才越界也丢掉)
+                if g.state == .ended, !aborted, !pan1IsScroll, !anyOutside(g) { flushMove(force: true) }
+                moveAccX = 0; moveAccY = 0; pan1IsScroll = false; aborted = false
                 return
             }
+            if abortIfOutside(g) { return }
             let t = g.translation(in: view); g.setTranslation(.zero, in: view)
             if pan1IsScroll {
                 emitScroll(fx: 0, fy: t.y)        // 右侧滚动条: 单指上下滑 = 滚动
@@ -107,8 +149,9 @@ struct TrackpadSurface: UIViewRepresentable {
         }
 
         @objc func handlePan2(_ g: UIPanGestureRecognizer) {
-            if g.state == .began { scrollRemX = 0; scrollRemY = 0 }   // 每次手势独立, 不继承上次余量
-            if g.state == .ended || g.state == .cancelled { scrollRemX = 0; scrollRemY = 0; return }
+            if g.state == .began { scrollRemX = 0; scrollRemY = 0; aborted = false }   // 每次手势独立, 不继承上次余量
+            if g.state == .ended || g.state == .cancelled { scrollRemX = 0; scrollRemY = 0; aborted = false; return }
+            if abortIfOutside(g) { return }
             let t = g.translation(in: g.view); g.setTranslation(.zero, in: g.view)
             emitScroll(fx: t.x, fy: t.y)          // 双指拖 = 滚动 (横纵都支持)
         }
@@ -139,6 +182,9 @@ struct TrackpadView: View {
     let client: SidekeyClient
     var enabled: Bool = true
     @Environment(\.sidekeyTheme) private var theme
+    @Environment(\.inputGuard) private var inputGuard
+    @State private var guardID = UUID()
+    @State private var resetToken = 0          // §5.2: 变一次 = 取消正在进行的手势并清掉累积位移
     @AppStorage("sidekey.trackpad.speed") private var trackpadSpeed: Double = TrackpadTuning.defaultSpeed
     @AppStorage("sidekey.scroll.speed") private var scrollSpeed: Double = TrackpadTuning.scrollDefaultSpeed
 
@@ -146,6 +192,8 @@ struct TrackpadView: View {
         surface
             .opacity(enabled ? 1 : 0.4)
             .allowsHitTesting(enabled)
+            .onAppear { inputGuard?.register(guardID) { resetToken &+= 1 } }
+            .onDisappear { inputGuard?.unregister(guardID) }
     }
 
     private var surface: some View {
@@ -155,23 +203,24 @@ struct TrackpadView: View {
             TrackpadSurface(
                 sensitivity: CGFloat(trackpadSpeed),
                 scrollSpeed: CGFloat(scrollSpeed),
-                onMove: { dx, dy in client.sendMouseMove(dx: dx, dy: dy) },
-                onScroll: { dx, dy in client.sendMouseScroll(dx: dx, dy: dy) },
+                onMove: { dx, dy in if inputGuard?.frozen != true { client.sendMouseMove(dx: dx, dy: dy) } },
+                onScroll: { dx, dy in if inputGuard?.frozen != true { client.sendMouseScroll(dx: dx, dy: dy) } },
                 onLeftClick: {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    client.sendMouseClick(button: "left")
+                    if let g = inputGuard { g.mouseClick(button: "left") } else { client.sendMouseClick(button: "left") }
                 },
                 onRightClick: {
                     UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-                    client.sendMouseClick(button: "right")
-                }
+                    if let g = inputGuard { g.mouseClick(button: "right") } else { client.sendMouseClick(button: "right") }
+                },
+                resetToken: resetToken
             )
             VStack(spacing: 6) {
                 Image(systemName: "hand.point.up.left")
-                    .font(.system(size: 28, weight: .light)).foregroundStyle(theme.textTertiary)
+                    .font(.system(size: 28, weight: .light)).foregroundStyle(theme.hint)
                 Text("触控板").font(.system(size: 15, weight: .semibold)).foregroundStyle(theme.textSecondary)
                 Text("单指移动 · 轻点左键 · 双指点右键 · 双指滚动\n右侧边单指上下滑也能滚动")
-                    .font(.system(size: 11)).foregroundStyle(theme.textTertiary)
+                    .font(.system(size: 11)).foregroundStyle(theme.hint)
                     .multilineTextAlignment(.center)
             }
             .allowsHitTesting(false)   // 提示文字不挡手势
@@ -184,9 +233,9 @@ struct TrackpadView: View {
                         Rectangle().fill(theme.accent.opacity(0.05))
                         Image(systemName: "arrow.up.and.down")
                             .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(theme.textTertiary)
+                            .foregroundStyle(theme.hint)
                     }
-                    .frame(width: geo.size.width * TrackpadTuning.edgeScrollFraction)
+                    .frame(width: TrackpadTuning.scrollBandWidth(geo.size.width))
                     .overlay(Rectangle().fill(theme.hairline).frame(width: 1), alignment: .leading)
                 }
             }
@@ -203,45 +252,65 @@ struct TrackpadView: View {
 /// - code "left" 「左键」: 按住 = 左键 down, 松开 = up —— 轻点即一次单击, 按住可拖(另一只手在触控板上移动)。
 /// - code "right" 「右键」: 点一下 = 右键单击。
 /// 由 KeyboardView 在正常模式渲染 (编辑器里仍是 KeyTile 静态块, 可拖拽/缩放)。
+///
+/// 触摸用 UIKit 的 `KeyPressTracker` (UILongPress, 最短按压 0): 每个 .began 必有且仅有一个终结态 (.ended / .cancelled / .failed),
+/// 所以「每一次触摸」都从 `PressLifecycle` 的一次新按压开始、以 up / cancel 结束, 不靠任何会残留到下一次触摸的标志位 (审计第二轮阻断 2)。
 struct MouseKeyButton: View {
     let cap: KeyCap
     let client: SidekeyClient
     var enabled: Bool = true
     @Environment(\.scenePhase) private var scenePhase
-    @State private var held = false
+    @Environment(\.inputGuard) private var inputGuard
+    @State private var guardID = UUID()
+    @State private var life = PressLifecycle()
 
     private var isLeft: Bool { cap.code.lowercased() != "right" }
+    private var held: Bool { life.pressed }
+
+    // 鼠标事件经窗口的输入守卫 (连接池级仲裁); 没有守卫 (编辑器等) 时直接发。
+    private func mouseDown() { if let g = inputGuard { g.mouseDown(button: "left", source: guardID) } else { client.sendMouseDown(button: "left") } }
+    private func mouseUp() { if let g = inputGuard { g.mouseUp(button: "left", source: guardID) } else { client.sendMouseUp(button: "left") } }
+    private func mouseClick(_ b: String) { if let g = inputGuard { g.mouseClick(button: b) } else { client.sendMouseClick(button: b) } }
 
     var body: some View {
-        let tile = KeyTile(cap: cap, enabled: enabled, pressed: held)
+        KeyTile(cap: cap, enabled: enabled, pressed: held)
             .contentShape(Rectangle())
             .opacity(enabled ? 1 : 0.4)
             .allowsHitTesting(enabled)
-            .onDisappear { releaseIfHeld() }
+            .overlay(KeyPressTracker(cancelOnMove: !isLeft, onDown: pressDown, onUp: pressUp, onCancel: pressCancel))
+            .onAppear {
+                // 守卫中断时已经替我们发了 up, 这里只作废这次按压 (之后到的 .ended 不会再触发; 下一次触摸是新的一次按压)
+                inputGuard?.register(guardID) { life.cancel() }
+            }
+            .onDisappear { releaseIfHeld(); inputGuard?.unregister(guardID) }
             .onChange(of: scenePhase) { p in if p != .active { releaseIfHeld() } }
             .onChange(of: enabled) { on in if !on { releaseIfHeld() } }
+    }
+
+    // MARK: 一次触摸的生命周期 (来自 KeyPressTracker, 主线程)
+    private func pressDown() {
+        // 冻结期间拒绝新输入; 没启用不响应
+        guard life.down(enabled: enabled, frozen: inputGuard?.frozen == true) else { return }
+        UIImpactFeedbackGenerator(style: isLeft ? .light : .rigid).impactOccurred()
+        if isLeft { mouseDown() }
+    }
+
+    private func pressUp() {
         if isLeft {
-            tile.gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        if !held {
-                            held = true
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            client.sendMouseDown(button: "left")
-                        }
-                    }
-                    .onEnded { _ in if held { held = false; client.sendMouseUp(button: "left") } }
-            )
-        } else {
-            tile.gesture(
-                DragGesture(minimumDistance: 0)
-                    .onEnded { _ in
-                        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-                        client.sendMouseClick(button: "right")
-                    }
-            )
+            let wasPressed = life.pressed
+            _ = life.up(enabled: true)
+            if wasPressed { mouseUp() }
+        } else if life.up(enabled: enabled) {          // 被取消的按压, 后到的 .ended 不再补发单击
+            mouseClick("right")
         }
     }
 
-    private func releaseIfHeld() { if held { held = false; client.sendMouseUp(button: "left") } }
+    /// .cancelled / .failed (系统取消、被别的手势抢走): 左键要松开, 右键什么都不发。
+    private func pressCancel() { releaseIfHeld(); life.cancel() }
+
+    private func releaseIfHeld() {
+        let wasPressed = life.pressed
+        life.cancel()
+        if isLeft, wasPressed { mouseUp() }
+    }
 }

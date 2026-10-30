@@ -8,12 +8,26 @@ struct KeyboardView: View {
     let connected: Bool
     var permissionMode: PermissionMode = .ask
     var effortLevel: EffortLevel = .high
+    var agentSessions: [AgentSession] = []    // 状态看板数据 (透传给 .agentSlot 键)
     var client: SidekeyClient? = nil          // 触控板要靠它发鼠标事件 (普通键走 onKey 即可)
+    @Environment(\.sidekeyTheme) private var theme
     let onKey: (KeyCap) -> Void
     var onEdit: (KeyCap) -> Void = { _ in }
+    /// 这套键位里存在的页 id: 跳转键的目标不在里面 (删页后的「未设置目标」, §6.3) 就显示为灰色、点了不跳转。nil = 不检查。
+    var pageIDs: Set<String>? = nil
+    /// 非编辑态下指定行高 (超高子页「刚好放下」用); nil = 按可用高度等分 (最小 40)。
+    var rowHeightOverride: CGFloat? = nil
+    /// 超高子页压到下限仍放不下时, 子页内部上下滚动。
+    var scrollsContent: Bool = false
 
     private let gap: CGFloat = 8
     private let cellH: CGFloat = 58
+
+    /// 跳转键是否有有效目标 (目标为空 = 未设置; 目标页已被删 = 未设置)。
+    private func jumpTargetSet(_ cap: KeyCap) -> Bool {
+        guard let t = cap.targetLayer, !t.isEmpty else { return false }
+        return pageIDs?.contains(t) ?? true
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -22,8 +36,13 @@ struct KeyboardView: View {
                     gridBody(width: geo.size.width, cellH: cellH)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else if scrollsContent {
+                ScrollView(.vertical, showsIndicators: true) {
+                    gridBody(width: geo.size.width, cellH: rowHeightOverride ?? fillCellH(geo.size.height))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             } else {
-                gridBody(width: geo.size.width, cellH: fillCellH(geo.size.height))
+                gridBody(width: geo.size.width, cellH: rowHeightOverride ?? fillCellH(geo.size.height))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
         }
@@ -66,13 +85,14 @@ struct KeyboardView: View {
     @ViewBuilder
     private func keyView(_ cap: KeyCap) -> some View {
         if editing {
-            KeyTile(cap: cap, enabled: true, permissionMode: permissionMode, effortLevel: effortLevel)
+            KeyTile(cap: cap, enabled: true, permissionMode: permissionMode, effortLevel: effortLevel,
+                    agentSessions: agentSessions)
                 .overlay(alignment: .topLeading) {
                     Image(systemName: "pencil")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.black)
+                        .foregroundStyle(theme.onWarning)
                         .padding(4)
-                        .background(Circle().fill(.yellow))
+                        .background(Circle().fill(theme.warning))
                         .padding(4)
                 }
                 .contentShape(Rectangle())
@@ -84,11 +104,12 @@ struct KeyboardView: View {
         } else {
             // permission/effort 都要把命令发给电脑才有意义 → 未连接时禁用 (与普通键一致); 只有切层键离线也可点。
             KeyCapButton(cap: cap,
-                         enabled: connected || cap.kind == .layer,
+                         enabled: cap.kind != .unknown && (connected || cap.kind == .layer) && (cap.kind != .layer || jumpTargetSet(cap)),
                          // 只让真正适合连发的键连发 (退格/方向/空格); Enter/Esc/字母/数字/修饰键不连发, 杜绝误长按。
                          repeatable: cap.kind == .normal && cap.sendText == nil && cap.mods.isEmpty
                             && ["backspace", "left", "right", "up", "down", "space"].contains(cap.code.lowercased()),
-                         permissionMode: permissionMode, effortLevel: effortLevel) { onKey(cap) }
+                         permissionMode: permissionMode, effortLevel: effortLevel,
+                         agentSessions: agentSessions) { onKey(cap) }
         }
     }
 }

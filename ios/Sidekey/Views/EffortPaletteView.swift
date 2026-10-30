@@ -24,7 +24,7 @@ struct EffortPaletteView: View {
                     }
                     Text("发送 /effort <级别> 斜杠命令设置。App 读不到 Claude Code 真实档位, 显示的是「上次由本机设定」的级别; 若在电脑上另行改过可能错位, 重选一次即可校正。ultracode 仅当前会话有效。")
                         .font(.system(size: 12))
-                        .foregroundStyle(theme.textTertiary)
+                        .foregroundStyle(theme.hint)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
                 }
@@ -44,7 +44,9 @@ struct EffortPaletteView: View {
                     Image(systemName: "xmark").font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(theme.textSecondary).frame(width: 40, height: 40)
                         .background(Circle().fill(theme.surfaceMuted))
+                        .frame(width: 48, height: 48).contentShape(Rectangle())   // 命中区 ≥ 44 (浮层里会被系统略微缩小, 留余量; M3 审计 N-S1)
                 }.buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "关闭")).accessibilityIdentifier("paletteClose")
             }
             HStack {
                 Text("Claude Code · /effort 思考力度")
