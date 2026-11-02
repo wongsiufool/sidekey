@@ -8,6 +8,7 @@
 Turn your iPhone into a wireless shortcut keyboard, trackpad, and mic for your own computer — all over your local Wi‑Fi.
 
 [![Download](https://img.shields.io/badge/⬇_下载-Releases-2ea44f?style=for-the-badge)](../../releases/latest)
+[![App Store](https://img.shields.io/badge/App_Store-免费下载-0D96F6?style=for-the-badge&logo=apple&logoColor=white)](https://apps.apple.com/app/apple-store/id6784690380?pt=129068024&ct=github&mt=8)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE.txt)
 
 </div>
@@ -35,7 +36,7 @@ Sidekey 是一个**伴侣 App**,由两部分组成:
 
 | 平台 Platform | 获取 Get it |
 |---|---|
-| **iPhone App** | App Store — 搜索 “Sidekey” / search **Sidekey** |
+| **iPhone App** | [App Store](https://apps.apple.com/app/apple-store/id6784690380?pt=129068024&ct=github&mt=8)（免费 / Free）—— 1.1 已适配 iPhone Duo / made for iPhone Duo |
 | **macOS 小助手** | [Releases](../../releases/latest) → `Sidekey-macOS.dmg`(已签名公证 signed & notarized) |
 | **Windows 小助手** | [Releases](../../releases/latest) → `SidekeyServer-Windows.exe` |
 
