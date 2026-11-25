@@ -390,7 +390,7 @@ def _keep_cursor_on_screen():
         pass
 
 
-def do_mouse(msg):
+def do_mouse(msg, held_buttons=None):
     """触控板/鼠标事件。action: move(dx,dy 相对) / click(button) / scroll(dx,dy) / down(button) / up(button)。"""
     action = (msg.get("action") or "").lower()
     try:
@@ -410,10 +410,16 @@ def do_mouse(msg):
             if dx or dy:
                 do_scroll(dx, dy)
         elif action == "down":
-            mouse.press(_mouse_button(msg.get("button", "left")))
+            button = _mouse_button(msg.get("button", "left"))
+            mouse.press(button)
+            if held_buttons is not None:
+                held_buttons.add(button)
             log.info(f"🖱  down {msg.get('button', 'left')}")
         elif action == "up":
-            mouse.release(_mouse_button(msg.get("button", "left")))
+            button = _mouse_button(msg.get("button", "left"))
+            mouse.release(button)
+            if held_buttons is not None:
+                held_buttons.discard(button)
             log.info(f"🖱  up {msg.get('button', 'left')}")
         else:
             log.warning(f"未知鼠标动作: {action!r}")
@@ -807,6 +813,7 @@ async def handler(websocket, path=None):
         await websocket.close(code=1013, reason="rate limited"); return
     log.info(f"📱 已连接: {peer}")
     gate = {"authed": TOKEN is None}
+    held_buttons = set()
     pusher = None
     auth_timer = None
     try:
@@ -862,7 +869,7 @@ async def handler(websocket, path=None):
                 if rid is not None:   # 手机端要回执时才回 (审计 M-5: 失败让手机保留听写文本)
                     await websocket.send(json.dumps({"type": "result", "reqId": rid, "ok": ok, "error": err}))
             elif mtype == "mouse":
-                do_mouse(msg)
+                do_mouse(msg, held_buttons)
             elif mtype == "list_windows":
                 # 手机端「窗口选择器」: 枚举所有可聚焦窗口回给它 (AX, 不需屏幕录制)
                 wl = await loop.run_in_executor(None, list_windows)
@@ -933,7 +940,7 @@ async def handler(websocket, path=None):
         if pusher:
             pusher.cancel()
         # 兜底: 断开时释放可能还按着的鼠标键, 防止「按住左键拖动」中途断连导致电脑端左键卡死。
-        for _btn in (Button.left, Button.right):
+        for _btn in held_buttons:
             try:
                 mouse.release(_btn)
             except Exception:  # noqa: BLE001
